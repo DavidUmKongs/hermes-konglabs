@@ -104,6 +104,18 @@
   }
   .header-btn:hover { border-color: var(--accent); color: var(--accent); }
 
+  .header-issue-link {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    text-decoration: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 10px;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .header-issue-link:hover { border-color: #e5534b; color: #e5534b; }
+
   /* ── Layout ───────────────────────────────────────── */
   #layout {
     display: flex;
@@ -505,6 +517,7 @@
   <div class="status-dot" :class="gw.state||'stopped'"></div>
   <div id="status-label" x-text="gw.state||'stopped'"></div>
   <div class="header-spacer"></div>
+  <a class="header-issue-link" href="https://github.com/praveen-ks-2001/hermes-agent-template/issues" target="_blank" rel="noopener">⚠ Report issue</a>
   <button class="header-btn" @click="restartGateway()">↺ Restart</button>
 </div>
 
