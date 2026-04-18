@@ -57,13 +57,13 @@ HERMES_DASHBOARD_HOST = "127.0.0.1"
 HERMES_DASHBOARD_PORT = int(os.environ.get("HERMES_DASHBOARD_PORT", "9119"))
 HERMES_DASHBOARD_URL = f"http://{HERMES_DASHBOARD_HOST}:{HERMES_DASHBOARD_PORT}"
 
-# Hop-by-hop headers (RFC 7230 §6.1) plus `host` and `authorization`.
-# We strip these before forwarding: host is set by httpx, authorization is
-# our edge-only basic auth credential that must not leak to the subprocess.
-HOP_BY_HOP = {
-    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-    "te", "trailers", "transfer-encoding", "upgrade", "host", "authorization",
-}
+# Mirror dashboard-ref-only/auth_proxy.py: strip only `host` (httpx sets it)
+# and `transfer-encoding` (httpx recomputes it from the body). Keep everything
+# else — notably `authorization`, because the SPA uses Bearer tokens against
+# hermes's own /api/env/reveal and OAuth endpoints, and keep `cookie` since
+# some hermes endpoints read it. Aggressive stripping was masking requests in
+# ways that produced spurious 401s.
+HOP_BY_HOP = {"host", "transfer-encoding"}
 
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
@@ -809,6 +809,16 @@ async def _proxy_to_dashboard(request: Request) -> Response:
     except httpx.RequestError as e:
         print(f"[proxy] upstream error for {request.method} {request.url.path}: {e}", flush=True)
         return HTMLResponse(DASHBOARD_UNAVAILABLE_HTML, status_code=502)
+
+    # Surface non-2xx responses from hermes into Railway logs so we can
+    # diagnose 401/500s without needing browser DevTools access.
+    if upstream.status_code >= 400:
+        body_snip = upstream.content[:200].decode("utf-8", errors="replace")
+        print(
+            f"[proxy] {request.method} {request.url.path} -> {upstream.status_code} "
+            f"body={body_snip!r}",
+            flush=True,
+        )
 
     # Strip hop-by-hop and length/encoding headers — Starlette recomputes them.
     resp_headers = {
