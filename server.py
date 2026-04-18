@@ -2,10 +2,19 @@
 Hermes Agent — Railway admin server.
 
 Responsibilities:
-  - Admin UI / setup wizard at /setup (Starlette + Jinja, protected by basic auth)
+  - Admin UI / setup wizard at /setup (Starlette + Jinja, cookie-auth guarded)
   - Management API at /setup/api/* (config, status, logs, gateway, pairing)
   - Reverse proxy at / and /* → native Hermes dashboard (hermes_cli/web_server, on 127.0.0.1:9119)
   - Managed subprocesses: `hermes gateway` (agent) and `hermes dashboard` (native UI)
+  - Cookie-based session auth at /login (HMAC-signed, 7-day expiry, httponly)
+
+Auth model: Basic Auth was dropped in favor of cookies because the Hermes React
+SPA's plain fetch() calls do not reliably include basic-auth creds across browsers,
+and basic-auth's per-directory protection space forced separate prompts for
+/setup and /. Cookies auto-include on every same-origin request, so both the
+setup UI and the proxied dashboard work with a single login. The cookie signing
+secret is regenerated on every process start, so any ADMIN_PASSWORD change on
+Railway (which triggers a redeploy) invalidates all existing sessions.
 
 First-visit behavior: if no provider+model config exists, GET / redirects to /setup.
 Once configured, / proxies to the Hermes dashboard. A small "← Setup" widget is
@@ -13,7 +22,6 @@ injected into every proxied HTML response so users can always return to the wiza
 """
 
 import asyncio
-import base64
 import json
 import os
 import re
@@ -26,19 +34,10 @@ from pathlib import Path
 
 import httpx
 from starlette.applications import Starlette
-from starlette.authentication import (
-    AuthCredentials,
-    AuthenticationBackend,
-    AuthenticationError,
-    SimpleUser,
-)
-from starlette.middleware import Middleware
-from starlette.middleware.authentication import AuthenticationMiddleware
 from starlette.requests import Request
 from starlette.responses import (
     HTMLResponse,
     JSONResponse,
-    PlainTextResponse,
     RedirectResponse,
     Response,
 )
@@ -229,29 +228,178 @@ def unmask(new: dict[str, str], existing: dict[str, str]) -> dict[str, str]:
     }
 
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
-class BasicAuth(AuthenticationBackend):
-    async def authenticate(self, conn):
-        if "Authorization" not in conn.headers:
-            return None
-        try:
-            scheme, creds = conn.headers["Authorization"].split()
-            if scheme.lower() != "basic":
-                return None
-            user, _, pw = base64.b64decode(creds).decode().partition(":")
-        except Exception:
-            raise AuthenticationError("Invalid credentials")
-        if user == ADMIN_USERNAME and pw == ADMIN_PASSWORD:
-            return AuthCredentials(["authenticated"]), SimpleUser(user)
-        raise AuthenticationError("Invalid credentials")
+# ── Auth (cookie-based) ───────────────────────────────────────────────────────
+# We use HMAC-signed cookies instead of HTTP Basic Auth because:
+#   1. Basic auth's per-directory protection space means browsers cache creds
+#      for /setup/* separately from /*, forcing re-prompt on navigation.
+#   2. Browser behavior for sending Basic auth on XHR/fetch is inconsistent;
+#      the Hermes React SPA's plain fetch() calls don't reliably include it,
+#      causing every proxied API call to 401.
+# Cookies are auto-included on every same-origin request (navigation + XHR)
+# so both the setup UI and the proxied Hermes dashboard work with one login.
+#
+# The SECRET is regenerated on every process start. That means any ADMIN_PASSWORD
+# change via Railway → redeploy → all existing cookies invalidate → users re-login.
+import hashlib as _hashlib
+import hmac as _hmac
+from urllib.parse import quote as _url_quote, urlparse as _urlparse
+
+COOKIE_NAME = "hermes_auth"
+COOKIE_MAX_AGE = 7 * 86400  # 7 days
+COOKIE_SECRET = secrets.token_bytes(32)
+
+# Public paths — no auth required. Everything else is behind the cookie gate.
+PUBLIC_PATHS = {"/health", "/login", "/logout"}
 
 
-def guard(request: Request):
-    if not request.user.is_authenticated:
-        return PlainTextResponse(
-            "Unauthorized", status_code=401,
-            headers={"WWW-Authenticate": 'Basic realm="hermes-admin"'},
+def _make_auth_token() -> str:
+    """Build a cookie value: `<expires>.<hmac-sha256>`."""
+    expires = str(int(time.time()) + COOKIE_MAX_AGE)
+    sig = _hmac.new(COOKIE_SECRET, expires.encode(), _hashlib.sha256).hexdigest()
+    return f"{expires}.{sig}"
+
+
+def _verify_auth_token(token: str) -> bool:
+    try:
+        expires_s, sig = token.rsplit(".", 1)
+        if int(expires_s) < time.time():
+            return False
+        expected = _hmac.new(COOKIE_SECRET, expires_s.encode(), _hashlib.sha256).hexdigest()
+        return _hmac.compare_digest(sig, expected)
+    except Exception:
+        return False
+
+
+def _is_authenticated(request: Request) -> bool:
+    return _verify_auth_token(request.cookies.get(COOKIE_NAME, ""))
+
+
+def _safe_return_to(value: str) -> str:
+    """Reject open-redirect attempts — only allow same-origin relative paths."""
+    if not value or not value.startswith("/") or value.startswith("//"):
+        return "/"
+    # Strip any scheme/netloc that slipped through.
+    p = _urlparse(value)
+    if p.scheme or p.netloc:
+        return "/"
+    return value
+
+
+def guard(request: Request) -> Response | None:
+    """Enforce auth on protected routes.
+
+    - HTML navigation: 302 to /login?returnTo=<path>
+    - API / XHR: 401 JSON (so the SPA's fetch() can surface it cleanly)
+    """
+    if _is_authenticated(request):
+        return None
+    accept = request.headers.get("accept", "").lower()
+    wants_html = "text/html" in accept
+    if wants_html:
+        rt = request.url.path
+        if request.url.query:
+            rt = f"{rt}?{request.url.query}"
+        return RedirectResponse(f"/login?returnTo={_url_quote(rt)}", status_code=302)
+    return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+
+LOGIN_PAGE_HTML = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hermes Agent — Sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d0f14;color:#c9d1d9;font-family:'IBM Plex Sans',sans-serif;
+  min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.card{background:#14181f;border:1px solid #252d3d;border-radius:12px;padding:36px 32px;width:100%;max-width:380px;
+  box-shadow:0 20px 40px rgba(0,0,0,0.4)}
+.brand{text-align:center;margin-bottom:28px}
+.brand-logo{display:inline-flex;align-items:center;gap:10px;font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:18px;color:#6272ff}
+.brand-logo span{color:#6b7688;font-weight:400}
+.brand-sub{font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b7688;margin-top:8px;letter-spacing:1.5px;text-transform:uppercase}
+label{display:block;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b7688;
+  letter-spacing:0.05em;text-transform:uppercase;margin-bottom:6px;margin-top:16px}
+input{width:100%;background:#0d0f14;border:1px solid #252d3d;border-radius:6px;color:#c9d1d9;
+  font-family:'IBM Plex Mono',monospace;font-size:13px;padding:9px 11px;outline:none;transition:border-color .15s}
+input:focus{border-color:#6272ff}
+button{width:100%;margin-top:24px;background:#6272ff;border:1px solid #6272ff;border-radius:6px;color:#fff;
+  font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:500;padding:10px;cursor:pointer;
+  transition:background .15s,border-color .15s}
+button:hover{background:#7b8fff;border-color:#7b8fff}
+.err{background:rgba(248,81,73,0.08);border:1px solid rgba(248,81,73,0.3);border-radius:6px;
+  color:#f85149;font-family:'IBM Plex Mono',monospace;font-size:12px;padding:8px 12px;margin-bottom:14px;text-align:center}
+.footnote{margin-top:18px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#6b7688;text-align:center;line-height:1.6}
+</style></head>
+<body>
+<div class="card">
+  <div class="brand">
+    <div class="brand-logo">hermes<span>/admin</span></div>
+    <div class="brand-sub">Sign in to continue</div>
+  </div>
+  __ERROR__
+  <form method="POST" action="/login">
+    <input type="hidden" name="returnTo" value="__RETURN_TO__">
+    <label for="username">Username</label>
+    <input id="username" name="username" type="text" autocomplete="username" autofocus required>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Sign in</button>
+  </form>
+  <p class="footnote">Credentials are the <code>ADMIN_USERNAME</code> and <code>ADMIN_PASSWORD</code><br>Railway service variables.</p>
+</div>
+</body></html>"""
+
+
+def _html_escape(s: str) -> str:
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+             .replace('"', "&quot;").replace("'", "&#39;"))
+
+
+async def page_login(request: Request) -> Response:
+    """GET /login — render the sign-in form."""
+    # Already signed in? Bounce to returnTo (or /).
+    if _is_authenticated(request):
+        return RedirectResponse(_safe_return_to(request.query_params.get("returnTo", "/")), status_code=302)
+    rt = _safe_return_to(request.query_params.get("returnTo", "/"))
+    error_html = ('<div class="err">Invalid username or password</div>'
+                  if request.query_params.get("error") else "")
+    html = (LOGIN_PAGE_HTML
+            .replace("__ERROR__", error_html)
+            .replace("__RETURN_TO__", _html_escape(rt)))
+    return HTMLResponse(html)
+
+
+async def login_post(request: Request) -> Response:
+    """POST /login — validate creds and set the auth cookie."""
+    form = await request.form()
+    username = str(form.get("username", ""))
+    password = str(form.get("password", ""))
+    return_to = _safe_return_to(str(form.get("returnTo", "/")))
+
+    valid_user = _hmac.compare_digest(username, ADMIN_USERNAME)
+    valid_pw = _hmac.compare_digest(password, ADMIN_PASSWORD)
+    if valid_user and valid_pw:
+        resp = RedirectResponse(return_to, status_code=302)
+        resp.set_cookie(
+            COOKIE_NAME,
+            _make_auth_token(),
+            max_age=COOKIE_MAX_AGE,
+            httponly=True,
+            samesite="lax",
+            path="/",
         )
+        return resp
+    return RedirectResponse(f"/login?returnTo={_url_quote(return_to)}&error=1", status_code=302)
+
+
+async def logout(request: Request) -> Response:
+    """GET /logout — clear cookie and bounce to login."""
+    resp = RedirectResponse("/login", status_code=302)
+    resp.delete_cookie(COOKIE_NAME, path="/")
+    return resp
 
 
 # ── Gateway manager ───────────────────────────────────────────────────────────
@@ -595,13 +743,18 @@ async def api_pairing_revoke(request: Request):
 
 
 # ── Reverse proxy → Hermes dashboard ──────────────────────────────────────────
+_WIDGET_LINK_STYLE = (
+    "background:rgba(20,24,31,0.92);backdrop-filter:blur(8px);"
+    "border:1px solid #252d3d;border-radius:6px;padding:6px 12px;"
+    "color:#c9d1d9;text-decoration:none;display:inline-flex;"
+    "align-items:center;gap:6px;"
+)
 BACK_TO_SETUP_WIDGET = (
     '<div id="hermes-back-widget" style="position:fixed;top:14px;right:14px;'
     'z-index:99999;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;'
-    'font-size:11px;">'
-    '<a href="/setup" style="background:rgba(20,24,31,0.92);backdrop-filter:blur(8px);'
-    'border:1px solid #252d3d;border-radius:6px;padding:6px 12px;color:#c9d1d9;'
-    'text-decoration:none;display:inline-flex;align-items:center;gap:6px;">← Setup</a>'
+    'font-size:11px;display:flex;gap:8px;">'
+    f'<a href="/setup" style="{_WIDGET_LINK_STYLE}">← Setup</a>'
+    f'<a href="/logout" style="{_WIDGET_LINK_STYLE}">Sign out</a>'
     '</div>'
 )
 
@@ -700,7 +853,7 @@ async def route_proxy(request: Request) -> Response:
 async def route_setup_404(request: Request) -> Response:
     """Typos under /setup/* should 404 here — not fall through to the proxy."""
     if err := guard(request): return err
-    return PlainTextResponse("Not Found", status_code=404)
+    return Response("Not Found", status_code=404, media_type="text/plain")
 
 
 # ── App lifecycle ─────────────────────────────────────────────────────────────
@@ -734,10 +887,13 @@ async def lifespan(app):
 ANY_METHOD = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
 
 routes = [
-    # Unauthenticated — Railway healthcheck.
+    # Public — no auth required.
     Route("/health",                            route_health),
+    Route("/login",                             page_login,          methods=["GET"]),
+    Route("/login",                             login_post,          methods=["POST"]),
+    Route("/logout",                            logout),
 
-    # Our setup wizard + management API, all under /setup/* (basic-auth guarded).
+    # Our setup wizard + management API, all under /setup/* (cookie-auth guarded).
     Route("/setup",                             page_index),
     Route("/setup/",                            page_index),
     Route("/setup/api/config",                  api_config_get,      methods=["GET"]),
@@ -764,11 +920,9 @@ routes = [
     Route("/{path:path}",                       route_proxy,         methods=ANY_METHOD),
 ]
 
-app = Starlette(
-    routes=routes,
-    middleware=[Middleware(AuthenticationMiddleware, backend=BasicAuth())],
-    lifespan=lifespan,
-)
+# No middleware — auth is enforced per-handler via guard(). This keeps /health
+# and /login truly unauthenticated without middleware gymnastics.
+app = Starlette(routes=routes, lifespan=lifespan)
 
 if __name__ == "__main__":
     import uvicorn
