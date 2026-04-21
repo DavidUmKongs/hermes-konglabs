@@ -1410,12 +1410,25 @@ function app() {
           this.notify('Base URL is required for Custom Endpoint', false);
           return;
         }
-        if (/\b(localhost|127\.0\.0\.1|0\.0\.0\.0|::1)\b/i.test(url)) {
-          this.notify('Base URL must be publicly reachable — Railway cannot hit localhost', false);
-          return;
+        let parsed;
+        try { parsed = new URL(url); } catch {
+          this.notify('Base URL is not a valid URL', false); return;
         }
-        if (!/^https?:\/\//i.test(url)) {
-          this.notify('Base URL must start with http:// or https://', false);
+        if (!/^https?:$/i.test(parsed.protocol)) {
+          this.notify('Base URL must start with http:// or https://', false); return;
+        }
+        const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+        const isPrivate =
+          host === 'localhost' ||
+          /^127\./.test(host) ||
+          host === '0.0.0.0' ||
+          host === '::1' || host === '::' ||
+          /^10\./.test(host) ||
+          /^192\.168\./.test(host) ||
+          /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host) ||
+          /^169\.254\./.test(host);
+        if (isPrivate) {
+          this.notify('Base URL must be publicly reachable — Railway cannot hit localhost/private IPs', false);
           return;
         }
       }

@@ -173,22 +173,19 @@ def write_config_yaml(data: dict[str, str]) -> None:
     over auto-detection from .env keys, so this prevents a stale OpenRouter
     key from hijacking requests intended for the user's custom endpoint.
     """
-    model = data.get("LLM_MODEL", "")
+    model = data.get("LLM_MODEL", "").strip()
     base_url = data.get(CUSTOM_BASE_URL_KEY, "").strip()
     if base_url:
-        # Quote safely for YAML — backslashes/double-quotes are rare in URLs
-        # but escape anyway to avoid surprises.
-        safe_base_url = base_url.replace("\\", "\\\\").replace('"', '\\"')
         model_block = (
             f'model:\n'
-            f'  default: "{model}"\n'
+            f'  default: {json.dumps(model)}\n'
             f'  provider: "custom"\n'
-            f'  base_url: "{safe_base_url}"\n'
+            f'  base_url: {json.dumps(base_url)}\n'
         )
     else:
         model_block = (
             f'model:\n'
-            f'  default: "{model}"\n'
+            f'  default: {json.dumps(model)}\n'
             f'  provider: "auto"\n'
         )
     config_path = Path(HERMES_HOME) / "config.yaml"
