@@ -84,6 +84,11 @@ ENV_VARS = [
     ("KIMI_API_KEY",             "Kimi",                     "provider",  True),
     ("MINIMAX_API_KEY",          "MiniMax",                  "provider",  True),
     ("HF_TOKEN",                 "Hugging Face",             "provider",  True),
+    # Custom OpenAI-compatible endpoint (Ollama, vLLM, llama.cpp, LM Studio,
+    # Factory AI, etc.). Hermes treats `provider: custom` as a first-class
+    # inference provider — see write_config_yaml() below.
+    ("OPENAI_API_KEY",           "Custom Endpoint API Key",  "provider",  True),
+    ("OPENAI_BASE_URL",          "Custom Endpoint Base URL", "provider",  False),
     ("PARALLEL_API_KEY",         "Parallel (search)",        "tool",      True),
     ("FIRECRAWL_API_KEY",        "Firecrawl (scrape)",       "tool",      True),
     ("TAVILY_API_KEY",           "Tavily (search)",          "tool",      True),
@@ -116,6 +121,21 @@ ENV_VARS = [
 
 SECRET_KEYS  = {k for k, _, _, s in ENV_VARS if s}
 PROVIDER_KEYS = [k for k, _, c, _ in ENV_VARS if c == "provider"]
+# Keys that together define the "custom endpoint" provider. When both are set,
+# Hermes is pointed at an OpenAI-compatible server via `provider: custom`.
+CUSTOM_PROVIDER_KEY = "OPENAI_API_KEY"
+CUSTOM_BASE_URL_KEY = "OPENAI_BASE_URL"
+# Display grouping for api_status(): friendly labels that replace the noisy
+# auto-derived names (e.g. "Openai Base Url") for multi-env-var providers.
+PROVIDER_DISPLAY = {
+    "OPENROUTER_API_KEY":  "OpenRouter",
+    "DEEPSEEK_API_KEY":    "DeepSeek",
+    "DASHSCOPE_API_KEY":   "DashScope",
+    "GLM_API_KEY":         "GLM / Z.AI",
+    "KIMI_API_KEY":        "Kimi",
+    "MINIMAX_API_KEY":     "MiniMax",
+    "HF_TOKEN":            "Hugging Face",
+}
 CHANNEL_MAP  = {
     "Telegram":    "TELEGRAM_BOT_TOKEN",
     "Discord":     "DISCORD_BOT_TOKEN",
@@ -145,15 +165,33 @@ def read_env(path: Path) -> dict[str, str]:
 
 
 def write_config_yaml(data: dict[str, str]) -> None:
-    """Write a minimal config.yaml so hermes picks up the model and provider."""
-    model = data.get("LLM_MODEL", "")
+    """Write a minimal config.yaml so hermes picks up the model and provider.
+
+    When a custom OpenAI-compatible endpoint is configured (OPENAI_BASE_URL is
+    non-empty), we write `provider: custom` and `base_url: <url>` explicitly.
+    Per Hermes's provider-runtime resolver, `model.provider` takes precedence
+    over auto-detection from .env keys, so this prevents a stale OpenRouter
+    key from hijacking requests intended for the user's custom endpoint.
+    """
+    model = data.get("LLM_MODEL", "").strip()
+    base_url = data.get(CUSTOM_BASE_URL_KEY, "").strip()
+    if base_url:
+        model_block = (
+            f'model:\n'
+            f'  default: {json.dumps(model)}\n'
+            f'  provider: "custom"\n'
+            f'  base_url: {json.dumps(base_url)}\n'
+        )
+    else:
+        model_block = (
+            f'model:\n'
+            f'  default: {json.dumps(model)}\n'
+            f'  provider: "auto"\n'
+        )
     config_path = Path(HERMES_HOME) / "config.yaml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(f"""\
-model:
-  default: "{model}"
-  provider: "auto"
-
+{model_block}
 terminal:
   backend: "local"
   timeout: 60
@@ -206,12 +244,20 @@ def is_config_complete(data: dict[str, str] | None = None) -> bool:
     """Single source of truth for 'ready to run the gateway'.
 
     Used by: GET / redirect, auto_start on boot, admin API status.
+
+    For the custom-endpoint provider, we require BOTH the API key and the
+    base URL — an API key alone doesn't tell Hermes where to send requests.
+    For all other providers, any API key in PROVIDER_KEYS is sufficient.
     """
     if data is None:
         data = read_env(ENV_FILE)
     has_model = bool(data.get("LLM_MODEL"))
-    has_provider = any(data.get(k) for k in PROVIDER_KEYS)
-    return has_model and has_provider
+    has_custom = bool(data.get(CUSTOM_PROVIDER_KEY)) and bool(data.get(CUSTOM_BASE_URL_KEY))
+    has_other_provider = any(
+        data.get(k) for k in PROVIDER_KEYS
+        if k not in (CUSTOM_PROVIDER_KEY, CUSTOM_BASE_URL_KEY)
+    )
+    return has_model and (has_custom or has_other_provider)
 
 
 def mask(data: dict[str, str]) -> dict[str, str]:
@@ -607,10 +653,18 @@ async def api_config_put(request: Request):
 async def api_status(request: Request):
     if err := guard(request): return err
     data = read_env(ENV_FILE)
-    providers = {
-        k.replace("_API_KEY","").replace("_TOKEN","").replace("HF_","HuggingFace ").replace("_"," ").title():
-        {"configured": bool(data.get(k))}
-        for k in PROVIDER_KEYS
+    # Build a friendly provider dict. Custom endpoint is a single logical
+    # entry (API key + base URL must both be set) rather than two rows.
+    providers: dict[str, dict] = {}
+    for k in PROVIDER_KEYS:
+        if k in (CUSTOM_PROVIDER_KEY, CUSTOM_BASE_URL_KEY):
+            continue
+        label = PROVIDER_DISPLAY.get(k) or (
+            k.replace("_API_KEY", "").replace("_TOKEN", "").replace("_", " ").title()
+        )
+        providers[label] = {"configured": bool(data.get(k))}
+    providers["Custom Endpoint"] = {
+        "configured": bool(data.get(CUSTOM_PROVIDER_KEY)) and bool(data.get(CUSTOM_BASE_URL_KEY))
     }
     channels = {
         name: {"configured": bool(v := data.get(key,"")) and v.lower() not in ("false","0","no")}

@@ -71,7 +71,24 @@ All other configuration (LLM provider, model, channels, tools) is managed throug
 
 ## Supported Providers
 
-OpenRouter, DeepSeek, DashScope, GLM / Z.AI, Kimi, MiniMax, HuggingFace
+OpenRouter, DeepSeek, DashScope, GLM / Z.AI, Kimi, MiniMax, HuggingFace,
+**Custom Endpoint** (any OpenAI-compatible API — Ollama, vLLM, llama.cpp, LM Studio, Factory AI, …).
+
+### Using a local model (Ollama / vLLM / LM Studio)
+
+Railway containers cannot reach `localhost` on your machine. To use a model running on
+your home PC (e.g. `ollama run gemma4`), expose it via a tunnel and paste the **public**
+URL into the Custom Endpoint **Base URL** field in the admin dashboard:
+
+```bash
+# Simplest: free, HTTPS-terminated, no account needed
+cloudflared tunnel --url http://localhost:11434
+# → https://<random>.trycloudflare.com  → append /v1 in the UI
+```
+
+Alternatives: `ngrok http 11434`, Tailscale Funnel, or router port-forwarding + DDNS.
+The **LLM Model** field must match the ID reported by `GET /v1/models` on your server
+(for Ollama, `ollama list`).
 
 ## Supported Channels
 
