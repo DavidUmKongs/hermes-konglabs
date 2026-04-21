@@ -813,11 +813,28 @@
                    :placeholder="selectedProvider ? (providerMap[selectedProvider]?.placeholder||'Paste your API key') : ''">
           </div>
 
+          <!-- Base URL — only shown for the Custom Endpoint provider. -->
+          <div class="field-gap" x-show="selectedProvider && providerMap[selectedProvider]?.custom">
+            <label class="field-label">Base URL</label>
+            <input type="text"
+                   :value="vars.OPENAI_BASE_URL||''"
+                   @input="vars.OPENAI_BASE_URL=$event.target.value"
+                   placeholder="https://your-tunnel.trycloudflare.com/v1">
+            <p class="hint">
+              Public URL of your OpenAI-compatible server. For a model running on your
+              local PC (Ollama, vLLM, LM Studio, …), expose it first with a tunnel
+              (Cloudflare Tunnel, ngrok, Tailscale Funnel) —
+              <strong>Railway cannot reach <code>localhost</code> or <code>127.0.0.1</code></strong>.
+              Must end with <code>/v1</code>.
+            </p>
+          </div>
+
           <div class="field-gap" x-show="selectedProvider">
             <label class="field-label">LLM Model</label>
             <input type="text" :value="vars.LLM_MODEL||''" @input="vars.LLM_MODEL=$event.target.value"
-                   placeholder="e.g. openai/gpt-4o-mini  or  deepseek/deepseek-chat">
-            <p class="hint">OpenRouter format: <code>provider/model-name</code></p>
+                   :placeholder="providerMap[selectedProvider]?.custom ? 'e.g. gemma4, gemma3:27b, qwen3:32b' : 'e.g. openai/gpt-4o-mini  or  deepseek/deepseek-chat'">
+            <p class="hint" x-show="!providerMap[selectedProvider]?.custom">OpenRouter format: <code>provider/model-name</code></p>
+            <p class="hint" x-show="providerMap[selectedProvider]?.custom">Model ID as returned by <code>GET /v1/models</code> on your server (Ollama: run <code>ollama list</code>).</p>
           </div>
         </div>
 
@@ -1266,13 +1283,17 @@ function app() {
     tools,
 
     providerMap: {
-      'OpenRouter':  { key: 'OPENROUTER_API_KEY',  placeholder: 'sk-or-...' },
-      'DeepSeek':    { key: 'DEEPSEEK_API_KEY',     placeholder: 'sk-...'    },
-      'DashScope':   { key: 'DASHSCOPE_API_KEY',    placeholder: ''          },
-      'GLM / Z.AI':  { key: 'GLM_API_KEY',          placeholder: ''          },
-      'Kimi':        { key: 'KIMI_API_KEY',          placeholder: ''          },
-      'MiniMax':     { key: 'MINIMAX_API_KEY',       placeholder: ''          },
-      'HuggingFace': { key: 'HF_TOKEN',              placeholder: 'hf_...'   },
+      'OpenRouter':       { key: 'OPENROUTER_API_KEY', placeholder: 'sk-or-...' },
+      'DeepSeek':         { key: 'DEEPSEEK_API_KEY',   placeholder: 'sk-...'    },
+      'DashScope':        { key: 'DASHSCOPE_API_KEY',  placeholder: ''          },
+      'GLM / Z.AI':       { key: 'GLM_API_KEY',        placeholder: ''          },
+      'Kimi':             { key: 'KIMI_API_KEY',       placeholder: ''          },
+      'MiniMax':          { key: 'MINIMAX_API_KEY',    placeholder: ''          },
+      'HuggingFace':      { key: 'HF_TOKEN',           placeholder: 'hf_...'    },
+      // Custom = any OpenAI-compatible endpoint. `custom: true` flips the UI
+      // into two-field mode (API key + Base URL) and unlocks `provider: custom`
+      // in the server-side config.yaml write path.
+      'Custom Endpoint':  { key: 'OPENAI_API_KEY',     placeholder: 'Any string your server accepts (e.g. "ollama")', custom: true },
     },
 
     selectedProvider: '',
@@ -1287,15 +1308,25 @@ function app() {
     get pendingCount() { return this.pending.length; },
 
     get isSetupDone() {
-      const keys = Object.values(this.providerMap).map(p => p.key);
-      return !!(this.vars.LLM_MODEL && keys.some(k => this.vars[k]));
+      if (!this.vars.LLM_MODEL) return false;
+      // Custom endpoint needs BOTH the API key and a base URL —
+      // matches is_config_complete() on the server.
+      const hasCustom = !!(this.vars.OPENAI_API_KEY && this.vars.OPENAI_BASE_URL);
+      const hasOther = Object.values(this.providerMap)
+        .filter(p => !p.custom)
+        .some(p => !!this.vars[p.key]);
+      return hasCustom || hasOther;
     },
 
     onProviderChange() {
-      // Clear keys from other providers when switching
+      // Clear keys from other providers when switching. Also clear the
+      // OPENAI_BASE_URL when switching away from a custom provider so it
+      // doesn't linger and silently trigger `provider: custom` on save.
+      const leavingCustom = !this.providerMap[this.selectedProvider]?.custom;
       for (const [name, p] of Object.entries(this.providerMap)) {
         if (name !== this.selectedProvider) this.vars[p.key] = '';
       }
+      if (leavingCustom) this.vars.OPENAI_BASE_URL = '';
     },
 
     clearChannel(ch) {
@@ -1329,9 +1360,18 @@ function app() {
         if (r.ok) {
           const d = await r.json();
           this.vars = d.vars || {};
-          // Detect active provider
-          for (const [name, p] of Object.entries(this.providerMap)) {
-            if (this.vars[p.key]) { this.selectedProvider = name; break; }
+          // Detect active provider. Prefer Custom Endpoint when both its API
+          // key and base URL are set — otherwise a stale OPENAI_API_KEY would
+          // bind the UI to Custom even when the user's actually using, say,
+          // OpenRouter alongside a separately-set OPENAI_API_KEY.
+          const customEntry = Object.entries(this.providerMap).find(([, p]) => p.custom);
+          if (customEntry && this.vars.OPENAI_API_KEY && this.vars.OPENAI_BASE_URL) {
+            this.selectedProvider = customEntry[0];
+          } else {
+            for (const [name, p] of Object.entries(this.providerMap)) {
+              if (p.custom) continue;
+              if (this.vars[p.key]) { this.selectedProvider = name; break; }
+            }
           }
           // Detect active channels
           this.channelsEnabled = {
@@ -1350,13 +1390,35 @@ function app() {
           // savedConfigComplete reflects the persisted server-side state.
           // Masked secrets from the server still show truthy, so this
           // mirrors the backend's is_config_complete() check.
-          const providerKeys = Object.values(this.providerMap).map(p => p.key);
-          this.savedConfigComplete = !!(this.vars.LLM_MODEL && providerKeys.some(k => this.vars[k]));
+          const hasCustom = !!(this.vars.OPENAI_API_KEY && this.vars.OPENAI_BASE_URL);
+          const hasOther = Object.values(this.providerMap)
+            .filter(p => !p.custom)
+            .some(p => !!this.vars[p.key]);
+          this.savedConfigComplete = !!(this.vars.LLM_MODEL && (hasCustom || hasOther));
         }
       } catch {}
     },
 
     async saveConfig() {
+      // Client-side guard against the single most common Custom Endpoint
+      // mistake: pasting a localhost URL that Railway can't reach. We block
+      // this before the PUT so the user gets immediate feedback instead of
+      // a cryptic gateway failure 30 seconds later.
+      if (this.providerMap[this.selectedProvider]?.custom) {
+        const url = (this.vars.OPENAI_BASE_URL || '').trim();
+        if (!url) {
+          this.notify('Base URL is required for Custom Endpoint', false);
+          return;
+        }
+        if (/\b(localhost|127\.0\.0\.1|0\.0\.0\.0|::1)\b/i.test(url)) {
+          this.notify('Base URL must be publicly reachable — Railway cannot hit localhost', false);
+          return;
+        }
+        if (!/^https?:\/\//i.test(url)) {
+          this.notify('Base URL must start with http:// or https://', false);
+          return;
+        }
+      }
       this.saving = true;
       try {
         const r = await fetch('/setup/api/config', {
