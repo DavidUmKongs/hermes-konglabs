@@ -28,6 +28,7 @@ import re
 import secrets
 import signal
 import time
+import uuid
 from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -40,6 +41,7 @@ from starlette.responses import (
     JSONResponse,
     RedirectResponse,
     Response,
+    StreamingResponse,
 )
 from starlette.routing import Route
 from starlette.templating import Jinja2Templates
@@ -84,8 +86,9 @@ ENV_VARS = [
     ("KIMI_API_KEY",             "Kimi",                     "provider",  True),
     ("MINIMAX_API_KEY",          "MiniMax",                  "provider",  True),
     ("HF_TOKEN",                 "Hugging Face",             "provider",  True),
+    ("FACTORY_API_KEY",          "Factory Droid",            "provider",  True),
     # Custom OpenAI-compatible endpoint (Ollama, vLLM, llama.cpp, LM Studio,
-    # Factory AI, etc.). Hermes treats `provider: custom` as a first-class
+    # etc.). Hermes treats `provider: custom` as a first-class
     # inference provider — see write_config_yaml() below.
     ("OPENAI_API_KEY",           "Custom Endpoint API Key",  "provider",  True),
     ("OPENAI_BASE_URL",          "Custom Endpoint Base URL", "provider",  False),
@@ -125,6 +128,59 @@ PROVIDER_KEYS = [k for k, _, c, _ in ENV_VARS if c == "provider"]
 # Hermes is pointed at an OpenAI-compatible server via `provider: custom`.
 CUSTOM_PROVIDER_KEY = "OPENAI_API_KEY"
 CUSTOM_BASE_URL_KEY = "OPENAI_BASE_URL"
+FACTORY_PROVIDER_KEY = "FACTORY_API_KEY"
+FACTORY_PROVIDER_ID = "factory-droid"
+FACTORY_PROVIDER_LABEL = "Factory Droid"
+FACTORY_PROXY_PREFIX = "/factory-droid"
+
+# Factory's Droid allocation is exposed to Hermes through a local, authenticated
+# compatibility proxy.  Hermes sees a named provider (`factory-droid`) rather
+# than the generic Custom Endpoint UI; the proxy adds Factory-specific headers
+# and forwards to the matching Factory LLM endpoint.
+FACTORY_DROID_OPENAI_BASE_URL = re.sub(
+    r"/(?:responses|chat/completions)/?$",
+    "",
+    os.environ.get("FACTORY_DROID_OPENAI_BASE_URL", "https://api.factory.ai/api/llm/o/v1").rstrip("/"),
+)
+FACTORY_DROID_ANTHROPIC_BASE_URL = re.sub(
+    r"/v1/messages/?$",
+    "",
+    os.environ.get("FACTORY_DROID_ANTHROPIC_BASE_URL", "https://api.factory.ai/api/llm/a").rstrip("/"),
+)
+FACTORY_DROID_USER_AGENT = os.environ.get("FACTORY_DROID_USER_AGENT", "factory-cli/0.85.0")
+
+FACTORY_DROID_MODEL_IDS = [
+    "minimax-m2.5",
+    "kimi-k2.5",
+    "glm-5",
+    "glm-5.1",
+    "gpt-5.4-mini",
+    "gpt-5.4",
+    "gpt-5.4-fast",
+    "gpt-5.3-codex",
+    "gpt-5.3-codex-fast",
+    "gpt-5.2",
+    "gpt-5.2-codex",
+    "claude-haiku-4-5-20251001",
+    "claude-sonnet-4-5-20250929",
+    "claude-sonnet-4-6",
+    "claude-opus-4-5-20251101",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-opus-4-6-fast",
+]
+FACTORY_DROID_COMMON_MODELS = {"glm-5", "glm-5.1", "glm-4.7", "kimi-k2.5"}
+FACTORY_DROID_ANTHROPIC_MODELS = {
+    "minimax-m2.5",
+    "claude-haiku-4-5-20251001",
+    "claude-sonnet-4-5-20250929",
+    "claude-sonnet-4-6",
+    "claude-opus-4-5-20251101",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-opus-4-6-fast",
+}
+
 # Display grouping for api_status(): friendly labels that replace the noisy
 # auto-derived names (e.g. "Openai Base Url") for multi-env-var providers.
 PROVIDER_DISPLAY = {
@@ -135,6 +191,7 @@ PROVIDER_DISPLAY = {
     "KIMI_API_KEY":        "Kimi",
     "MINIMAX_API_KEY":     "MiniMax",
     "HF_TOKEN":            "Hugging Face",
+    "FACTORY_API_KEY":     FACTORY_PROVIDER_LABEL,
 }
 CHANNEL_MAP  = {
     "Telegram":    "TELEGRAM_BOT_TOKEN",
@@ -164,6 +221,42 @@ def read_env(path: Path) -> dict[str, str]:
     return out
 
 
+def factory_droid_api_mode_for_model(model: str) -> str:
+    """Choose the Hermes wire protocol for a Factory Droid model ID."""
+    model_id = (model or "").strip().lower()
+    if model_id in FACTORY_DROID_ANTHROPIC_MODELS or model_id.startswith("claude-"):
+        return "anthropic_messages"
+    if model_id in FACTORY_DROID_COMMON_MODELS:
+        return "chat_completions"
+    # Factory's GPT / Codex models use the OpenAI Responses API.
+    return "codex_responses"
+
+
+def factory_droid_provider_for_model(model: str, api_mode: str | None = None) -> str:
+    """Return Factory's x-api-provider routing header for a model."""
+    model_id = (model or "").strip().lower()
+    if model_id.startswith("claude-"):
+        return "anthropic"
+    if model_id in {"minimax-m2.5", "kimi-k2.5", "glm-5", "glm-5.1", "glm-4.7"}:
+        return "fireworks"
+    if model_id.startswith("gemini-"):
+        return "google"
+    if api_mode == "anthropic_messages":
+        return "anthropic"
+    if api_mode == "chat_completions":
+        return "fireworks"
+    return "openai"
+
+
+def factory_droid_local_base_url(api_mode: str) -> str:
+    """Return the loopback base URL Hermes should call for Factory Droid."""
+    port = int(os.environ.get("PORT", "8080"))
+    if api_mode == "anthropic_messages":
+        # Anthropic SDK appends /v1/messages itself.
+        return f"http://127.0.0.1:{port}{FACTORY_PROXY_PREFIX}"
+    return f"http://127.0.0.1:{port}{FACTORY_PROXY_PREFIX}/v1"
+
+
 def write_config_yaml(data: dict[str, str]) -> None:
     """Write a minimal config.yaml so hermes picks up the model and provider.
 
@@ -175,7 +268,25 @@ def write_config_yaml(data: dict[str, str]) -> None:
     """
     model = data.get("LLM_MODEL", "").strip()
     base_url = data.get(CUSTOM_BASE_URL_KEY, "").strip()
-    if base_url:
+    factory_key = data.get(FACTORY_PROVIDER_KEY, "").strip()
+    if factory_key and not base_url:
+        api_mode = factory_droid_api_mode_for_model(model)
+        local_base_url = factory_droid_local_base_url(api_mode)
+        model_block = (
+            f'model:\n'
+            f'  default: {json.dumps(model)}\n'
+            f'  provider: {json.dumps(FACTORY_PROVIDER_ID)}\n'
+            f'  base_url: {json.dumps(local_base_url)}\n'
+            f'  api_mode: {json.dumps(api_mode)}\n'
+            f'custom_providers:\n'
+            f'  - name: {json.dumps(FACTORY_PROVIDER_LABEL)}\n'
+            f'    provider_key: {json.dumps(FACTORY_PROVIDER_ID)}\n'
+            f'    base_url: {json.dumps(local_base_url)}\n'
+            f'    key_env: {json.dumps(FACTORY_PROVIDER_KEY)}\n'
+            f'    model: {json.dumps(model)}\n'
+            f'    api_mode: {json.dumps(api_mode)}\n'
+        )
+    elif base_url:
         model_block = (
             f'model:\n'
             f'  default: {json.dumps(model)}\n'
@@ -596,6 +707,7 @@ dash = Dashboard()
 # Shared async HTTP client for the reverse proxy. Created lazily so we pick up
 # the running event loop, torn down in lifespan.
 _http_client: httpx.AsyncClient | None = None
+_factory_http_client: httpx.AsyncClient | None = None
 
 
 def get_http_client() -> httpx.AsyncClient:
@@ -606,6 +718,192 @@ def get_http_client() -> httpx.AsyncClient:
             follow_redirects=False,
         )
     return _http_client
+
+
+def get_factory_http_client() -> httpx.AsyncClient:
+    """HTTP client for long-running Factory Droid inference calls."""
+    global _factory_http_client
+    if _factory_http_client is None:
+        _factory_http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(900.0, connect=10.0),
+            follow_redirects=False,
+        )
+    return _factory_http_client
+
+
+def _bearer_token(value: str) -> str:
+    value = (value or "").strip()
+    if value.lower().startswith("bearer "):
+        return value[7:].strip()
+    return value
+
+
+def _factory_auth_header(api_key: str) -> str:
+    api_key = (api_key or "").strip()
+    return api_key if api_key.lower().startswith("bearer ") else f"Bearer {api_key}"
+
+
+def _factory_droid_expected_key() -> str:
+    data = read_env(ENV_FILE)
+    return (data.get(FACTORY_PROVIDER_KEY) or os.getenv(FACTORY_PROVIDER_KEY, "")).strip()
+
+
+def _factory_droid_request_key(request: Request) -> str:
+    auth = request.headers.get("authorization", "")
+    if auth:
+        token = _bearer_token(auth)
+        if token:
+            return token
+    return request.headers.get("x-api-key", "").strip()
+
+
+def _factory_droid_model_payload(body: bytes) -> dict:
+    if not body:
+        return {}
+    try:
+        payload = json.loads(body)
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _factory_droid_upstream(path: str) -> tuple[str, str] | None:
+    """Map a local OpenAI/Anthropic-compatible path to Factory's upstream."""
+    normalized = path.strip("/")
+    if normalized == "v1/responses":
+        return f"{FACTORY_DROID_OPENAI_BASE_URL}/responses", "codex_responses"
+    if normalized == "v1/chat/completions":
+        return f"{FACTORY_DROID_OPENAI_BASE_URL}/chat/completions", "chat_completions"
+    if normalized == "v1/messages":
+        return f"{FACTORY_DROID_ANTHROPIC_BASE_URL}/v1/messages", "anthropic_messages"
+    if normalized == "v1/messages/count_tokens":
+        return f"{FACTORY_DROID_ANTHROPIC_BASE_URL}/v1/messages/count_tokens", "anthropic_messages"
+    return None
+
+
+def _factory_droid_headers(request: Request, api_key: str, model: str, api_mode: str) -> dict[str, str]:
+    session_id = request.headers.get("x-session-id") or str(uuid.uuid4())
+    message_id = request.headers.get("x-assistant-message-id") or str(uuid.uuid4())
+    provider = factory_droid_provider_for_model(model, api_mode)
+    headers = {
+        "accept": request.headers.get("accept", "application/json"),
+        "content-type": request.headers.get("content-type", "application/json"),
+        "authorization": _factory_auth_header(api_key),
+        "x-api-provider": provider,
+        "x-factory-client": "cli",
+        "x-session-id": session_id,
+        "x-assistant-message-id": message_id,
+        "user-agent": FACTORY_DROID_USER_AGENT,
+    }
+
+    if api_mode == "anthropic_messages":
+        headers["anthropic-version"] = request.headers.get("anthropic-version", "2023-06-01")
+        # Factory's Anthropic-compatible endpoint expects bearer auth and a
+        # placeholder x-api-key, matching Droid CLI traffic.
+        headers["x-api-key"] = "placeholder"
+        if beta := request.headers.get("anthropic-beta"):
+            headers["anthropic-beta"] = beta
+        headers.setdefault("x-stainless-timeout", request.headers.get("x-stainless-timeout", "600"))
+    else:
+        stainless_defaults = {
+            "x-stainless-arch": "x64",
+            "x-stainless-lang": "python",
+            "x-stainless-os": "Linux",
+            "x-stainless-runtime": "python",
+            "x-stainless-retry-count": "0",
+            "x-stainless-package-version": request.headers.get("x-stainless-package-version", ""),
+        }
+        for header, default in stainless_defaults.items():
+            value = request.headers.get(header, default)
+            if value:
+                headers[header] = value
+
+    return headers
+
+
+async def route_factory_droid_proxy(request: Request) -> Response:
+    """Authenticated loopback proxy from Hermes to Factory Droid allocation."""
+    expected_key = _factory_droid_expected_key()
+    supplied_key = _factory_droid_request_key(request)
+    if not expected_key:
+        return JSONResponse({"error": "Factory Droid is not configured"}, status_code=503)
+    if not supplied_key or not secrets.compare_digest(supplied_key, _bearer_token(expected_key)):
+        return JSONResponse({"error": "Unauthorized Factory Droid proxy request"}, status_code=401)
+
+    path = request.path_params.get("path", "")
+    normalized = path.strip("/")
+    if normalized == "v1/models":
+        return JSONResponse({
+            "object": "list",
+            "data": [
+                {"id": model_id, "object": "model", "owned_by": "factory-droid"}
+                for model_id in FACTORY_DROID_MODEL_IDS
+            ],
+        })
+
+    mapped = _factory_droid_upstream(path)
+    if mapped is None:
+        return JSONResponse({"error": f"Unsupported Factory Droid path: /{normalized}"}, status_code=404)
+
+    upstream_url, api_mode = mapped
+    body = await request.body()
+    payload = _factory_droid_model_payload(body)
+    model = str(payload.get("model") or "").strip()
+    headers = _factory_droid_headers(request, expected_key, model, api_mode)
+
+    client = get_factory_http_client()
+    try:
+        upstream_req = client.build_request(
+            request.method,
+            upstream_url,
+            headers=headers,
+            content=body,
+        )
+        upstream = await client.send(upstream_req, stream=True)
+    except httpx.RequestError as e:
+        print(f"[factory-droid] upstream error for {request.method} /{normalized}: {e}", flush=True)
+        return JSONResponse({"error": "Factory Droid upstream unavailable"}, status_code=502)
+
+    resp_headers = {
+        k: v for k, v in upstream.headers.items()
+        if k.lower() not in HOP_BY_HOP
+        and k.lower() not in ("content-encoding", "content-length")
+    }
+    content_type = upstream.headers.get("content-type", "application/json")
+
+    if upstream.status_code >= 400:
+        content = await upstream.aread()
+        await upstream.aclose()
+        request_id = (
+            upstream.headers.get("x-request-id")
+            or upstream.headers.get("cf-ray")
+            or "-"
+        )
+        print(
+            f"[factory-droid] {request.method} /{normalized} -> {upstream.status_code} "
+            f"bytes={len(content)} request_id={request_id!r}",
+            flush=True,
+        )
+        return Response(
+            content=content,
+            status_code=upstream.status_code,
+            headers=resp_headers,
+            media_type=content_type,
+        )
+
+    async def iter_upstream():
+        try:
+            async for chunk in upstream.aiter_bytes():
+                yield chunk
+        finally:
+            await upstream.aclose()
+
+    return StreamingResponse(
+        iter_upstream(),
+        status_code=upstream.status_code,
+        headers=resp_headers,
+        media_type=content_type,
+    )
 
 
 # ── Route handlers ────────────────────────────────────────────────────────────
@@ -956,6 +1254,10 @@ async def lifespan(app):
         if _http_client is not None:
             await _http_client.aclose()
             _http_client = None
+        global _factory_http_client
+        if _factory_http_client is not None:
+            await _factory_http_client.aclose()
+            _factory_http_client = None
 
 
 ANY_METHOD = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
@@ -986,6 +1288,11 @@ routes = [
 
     # /setup/* typos return a real 404 — not a silent proxy fallthrough.
     Route("/setup/{path:path}",                 route_setup_404,     methods=ANY_METHOD),
+
+    # Loopback-only-by-token provider bridge. Hermes calls this as the named
+    # Factory Droid provider; external callers need the Factory API key bearer
+    # token, so the route cannot be used as an unauthenticated public proxy.
+    Route("/factory-droid/{path:path}",         route_factory_droid_proxy, methods=ANY_METHOD),
 
     # Root: redirect to /setup if unconfigured, otherwise proxy the dashboard.
     Route("/",                                  route_root,          methods=ANY_METHOD),
