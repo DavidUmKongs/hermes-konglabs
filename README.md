@@ -72,7 +72,19 @@ All other configuration (LLM provider, model, channels, tools) is managed throug
 ## Supported Providers
 
 OpenRouter, DeepSeek, DashScope, GLM / Z.AI, Kimi, MiniMax, HuggingFace,
-**Custom Endpoint** (any OpenAI-compatible API — Ollama, vLLM, llama.cpp, LM Studio, Factory AI, …).
+**Factory Droid**,
+**Custom Endpoint** (any OpenAI-compatible API — Ollama, vLLM, llama.cpp, LM Studio, …).
+
+### Using Factory Droid allocation
+
+Select **Factory Droid** in the setup UI, paste a `FACTORY_API_KEY` from
+`https://app.factory.ai/settings/api-keys`, and choose a Factory model ID such
+as `gpt-5.4-mini`, `gpt-5.4`, `gpt-5.3-codex`, `kimi-k2.5`, or `minimax-m2.5`.
+
+This is not the generic Custom Endpoint flow: the template writes a named
+`factory-droid` provider and routes Hermes through a local authenticated bridge
+that adds Factory Droid headers before forwarding requests to Factory, so usage
+is charged against your Factory plan allocation.
 
 ### Using a local model (Ollama / vLLM / LM Studio)
 
