@@ -787,14 +787,13 @@ def _factory_droid_headers(request: Request, api_key: str, model: str, api_mode:
     provider = factory_droid_provider_for_model(model, api_mode)
     headers = {
         "accept": request.headers.get("accept", "application/json"),
-        "content-type": "application/json",
+        "content-type": request.headers.get("content-type", "application/json"),
         "authorization": _factory_auth_header(api_key),
         "x-api-provider": provider,
         "x-factory-client": "cli",
         "x-session-id": session_id,
         "x-assistant-message-id": message_id,
         "user-agent": FACTORY_DROID_USER_AGENT,
-        "connection": "keep-alive",
     }
 
     if api_mode == "anthropic_messages":
@@ -875,10 +874,14 @@ async def route_factory_droid_proxy(request: Request) -> Response:
     if upstream.status_code >= 400:
         content = await upstream.aread()
         await upstream.aclose()
-        body_snip = content[:300].decode("utf-8", errors="replace")
+        request_id = (
+            upstream.headers.get("x-request-id")
+            or upstream.headers.get("cf-ray")
+            or "-"
+        )
         print(
             f"[factory-droid] {request.method} /{normalized} -> {upstream.status_code} "
-            f"body={body_snip!r}",
+            f"bytes={len(content)} request_id={request_id!r}",
             flush=True,
         )
         return Response(
@@ -890,7 +893,7 @@ async def route_factory_droid_proxy(request: Request) -> Response:
 
     async def iter_upstream():
         try:
-            async for chunk in upstream.aiter_raw():
+            async for chunk in upstream.aiter_bytes():
                 yield chunk
         finally:
             await upstream.aclose()
