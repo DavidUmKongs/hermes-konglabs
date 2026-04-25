@@ -20,10 +20,16 @@ fi
 # Override via Railway service variables: OLLAMA_HOST, OLLAMA_MODEL, OLLAMA_API_KEY.
 ENV_FILE=/data/.hermes/.env
 mkdir -p "$(dirname "$ENV_FILE")"
-[ ! -f "$ENV_FILE" ] && touch "$ENV_FILE"
+if [ ! -f "$ENV_FILE" ]; then
+  touch "$ENV_FILE"
+fi
 
-if ! grep -q "^LLM_MODEL=" "$ENV_FILE"; then
-  OLLAMA_HOST="${OLLAMA_HOST:-http://100.115.26.75:11434}"
+# Only seed when neither the host environment nor the persistent .env already
+# defines LLM_MODEL. This ensures Railway service variables (LLM_MODEL,
+# OPENAI_API_KEY, OPENAI_BASE_URL, etc.) are respected and never silently
+# overwritten by our defaults.
+if [ -z "$LLM_MODEL" ] && ! grep -q "^LLM_MODEL=" "$ENV_FILE"; then
+  OLLAMA_HOST="${OLLAMA_HOST:-http://localhost:11434}"
   OLLAMA_MODEL="${OLLAMA_MODEL:-gemma4:26b}"
   OLLAMA_API_KEY="${OLLAMA_API_KEY:-ollama}"
 
@@ -37,11 +43,20 @@ if ! grep -q "^LLM_MODEL=" "$ENV_FILE"; then
   {
     echo "# Model"
     echo "LLM_MODEL=$OLLAMA_MODEL"
-    echo ""
-    echo "# Providers"
-    echo "OPENAI_API_KEY=$OLLAMA_API_KEY"
-    echo "OPENAI_BASE_URL=$BASE"
   } >> "$ENV_FILE"
+
+  # Don't clobber explicit OPENAI_* values from host env or .env — only seed
+  # the OpenAI-compatible endpoint vars when they're not already provided.
+  if [ -z "$OPENAI_API_KEY" ] && ! grep -q "^OPENAI_API_KEY=" "$ENV_FILE"; then
+    {
+      echo ""
+      echo "# Providers"
+      echo "OPENAI_API_KEY=$OLLAMA_API_KEY"
+    } >> "$ENV_FILE"
+  fi
+  if [ -z "$OPENAI_BASE_URL" ] && ! grep -q "^OPENAI_BASE_URL=" "$ENV_FILE"; then
+    echo "OPENAI_BASE_URL=$BASE" >> "$ENV_FILE"
+  fi
 
   echo "[start] Seeded default Ollama provider: model=$OLLAMA_MODEL base_url=$BASE" >&2
 fi
