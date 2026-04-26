@@ -1,0 +1,86 @@
+import unittest
+from unittest.mock import AsyncMock, patch
+
+from starlette.testclient import TestClient
+
+import server
+
+
+class _FakeProc:
+    def __init__(self, stdout=b"", stderr=b"", returncode=0):
+        self._stdout = stdout
+        self._stderr = stderr
+        self.returncode = returncode
+        self.killed = False
+
+    async def communicate(self):
+        return self._stdout, self._stderr
+
+    def kill(self):
+        self.killed = True
+
+
+class ChatApiTests(unittest.TestCase):
+    def _client(self):
+        noop = AsyncMock(return_value=None)
+        patches = [
+            patch.object(server.dash, "start", noop),
+            patch.object(server.dash, "stop", noop),
+            patch.object(server.gw, "start", noop),
+            patch.object(server.gw, "stop", noop),
+        ]
+        for item in patches:
+            item.start()
+        self.addCleanup(lambda: [item.stop() for item in reversed(patches)])
+        return TestClient(server.app)
+
+    def _login(self, client: TestClient):
+        response = client.post(
+            "/login",
+            data={"username": server.ADMIN_USERNAME, "password": server.ADMIN_PASSWORD},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+
+    def test_api_chat_runs_hermes_cli_and_returns_session_id(self):
+        proc = _FakeProc(
+            stdout=b"hello from hermes\n",
+            stderr=b"session_id: 20260426_demo123\n",
+        )
+        create_proc = AsyncMock(return_value=proc)
+
+        with self._client() as client, patch("server.asyncio.create_subprocess_exec", create_proc):
+            self._login(client)
+            response = client.post(
+                "/api/chat",
+                json={"message": "hello", "resume": "sess_1", "skills": ["plan", "wiki"]},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "ok": True,
+                "response": "hello from hermes",
+                "session_id": "20260426_demo123",
+            },
+        )
+        create_proc.assert_awaited_once()
+        cmd = create_proc.await_args.args
+        self.assertEqual(cmd[:4], ("hermes", "--quiet", "-q", "hello"))
+        self.assertIn("--resume", cmd)
+        self.assertIn("sess_1", cmd)
+        self.assertIn("--skills", cmd)
+        self.assertIn("plan,wiki", cmd)
+
+    def test_setup_api_chat_validates_missing_message(self):
+        with self._client() as client:
+            self._login(client)
+            response = client.post("/setup/api/chat", json={})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"error": "Missing message"})
+
+
+if __name__ == "__main__":
+    unittest.main()
