@@ -1052,7 +1052,8 @@ def _csv_arg(value) -> str | None:
 
 
 def _extract_session_id(stderr_text: str) -> str | None:
-    match = re.search(r"session_id:\s*([^\s]+)", stderr_text or "")
+    cleaned = ANSI_ESCAPE.sub("", stderr_text or "")
+    match = re.search(r"session_id:\s*([^\s]+)", cleaned)
     return match.group(1) if match else None
 
 
@@ -1121,8 +1122,8 @@ async def _run_hermes_chat(body: dict) -> tuple[int, dict]:
         await proc.communicate()
         return 504, {"error": f"Hermes chat timed out after {timeout_seconds}s"}
 
-    stdout_text = stdout.decode("utf-8", errors="replace").strip()
-    stderr_text = stderr.decode("utf-8", errors="replace").strip()
+    stdout_text = ANSI_ESCAPE.sub("", stdout.decode("utf-8", errors="replace")).strip()
+    stderr_text = ANSI_ESCAPE.sub("", stderr.decode("utf-8", errors="replace")).strip()
     session_id = _extract_session_id(stderr_text)
 
     if proc.returncode != 0:

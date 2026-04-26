@@ -45,7 +45,7 @@ class ChatApiTests(unittest.TestCase):
     def test_api_chat_runs_hermes_cli_and_returns_session_id(self):
         proc = _FakeProc(
             stdout=b"hello from hermes\n",
-            stderr=b"session_id: 20260426_demo123\n",
+            stderr=b"\x1b[33msession_id: 20260426_demo123\x1b[0m\n",
         )
         create_proc = AsyncMock(return_value=proc)
 
