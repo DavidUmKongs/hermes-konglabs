@@ -60,6 +60,11 @@ HERMES_DASHBOARD_PORT = int(os.environ.get("HERMES_DASHBOARD_PORT", "9119"))
 HERMES_DASHBOARD_URL = f"http://{HERMES_DASHBOARD_HOST}:{HERMES_DASHBOARD_PORT}"
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 
+
+def gstack_skills_dir() -> Path:
+    """Resolve the gstack skills directory lazily so HOME can be patched."""
+    return Path(os.environ.get("HOME", "/data")) / ".claude" / "skills" / "gstack"
+
 # Mirror dashboard-ref-only/auth_proxy.py: strip only `host` (httpx sets it)
 # and `transfer-encoding` (httpx recomputes it from the body). Keep everything
 # else — notably `authorization`, because the SPA uses Bearer tokens against
@@ -418,6 +423,10 @@ agent:
   max_iterations: 50
 
 data_dir: "{HERMES_HOME}"
+
+skills:
+  external_dirs:
+    - {json.dumps(str(gstack_skills_dir()))}
 """)
 
 

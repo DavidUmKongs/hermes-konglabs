@@ -120,7 +120,22 @@ class CodexProviderTests(unittest.TestCase):
         self.assertIn('provider: "openai-codex"', text)
         self.assertIn('default: "gpt-5.3-codex"', text)
         self.assertIn('base_url: "https://chatgpt.com/backend-api/codex"', text)
+        self.assertIn('external_dirs:', text)
+        self.assertIn('/.claude/skills/gstack', text)
         self.assertNotIn('provider: "custom"', text)
+
+    def test_write_config_yaml_uses_current_home_for_gstack_path(self):
+        with TemporaryDirectory() as tmpdir, TemporaryDirectory() as fake_home, \
+                patch.object(server, "HERMES_HOME", tmpdir), \
+                patch.dict(server.os.environ, {"HOME": fake_home}, clear=False), \
+                patch("server._codex_runtime_base_url", return_value="https://chatgpt.com/backend-api/codex"):
+            server.write_config_yaml({
+                "LLM_MODEL": "gpt-5.3-codex",
+                "LLM_PROVIDER_MODE": "openai-codex",
+            })
+            text = Path(tmpdir, "config.yaml").read_text(encoding="utf-8")
+
+        self.assertIn(f'{fake_home}/.claude/skills/gstack', text)
 
     def test_is_config_complete_requires_codex_oauth_when_codex_selected(self):
         data = {

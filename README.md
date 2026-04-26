@@ -69,6 +69,13 @@ Message your Telegram bot. If you're a new user, a pairing request will appear i
 
 All other configuration (LLM provider, model, channels, tools) is managed through the admin dashboard.
 
+## Bundled Default Skills
+
+This image also ships the public [`garrytan/gstack`](https://github.com/garrytan/gstack)
+skill bundle as a default external Hermes skill directory. On boot, the repo is
+exposed at `~/.claude/skills/gstack` and added to `skills.external_dirs`, so the
+gstack skills are available without any manual install step.
+
 ## Supported Providers
 
 OpenRouter, DeepSeek, DashScope, GLM / Z.AI, Kimi, MiniMax, HuggingFace,
