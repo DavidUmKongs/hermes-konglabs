@@ -79,7 +79,7 @@ class ChatApiTests(unittest.TestCase):
         )
         create_proc.assert_awaited_once()
         cmd = create_proc.await_args.args
-        self.assertEqual(cmd[:4], ("hermes", "--quiet", "-q", "hello"))
+        self.assertEqual(cmd[:5], ("hermes", "chat", "-Q", "-q", "hello"))
         self.assertIn("--resume", cmd)
         self.assertIn("sess_1", cmd)
         self.assertIn("--skills", cmd)

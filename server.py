@@ -1216,7 +1216,7 @@ async def _run_hermes_chat(body: dict) -> tuple[int, dict]:
         if max_turns < 1:
             return 400, {"error": "max_turns must be >= 1"}
 
-    cmd = ["hermes", "--quiet", "-q", message]
+    cmd = ["hermes", "chat", "-Q", "-q", message]
 
     if resume := _string_arg(body.get("resume")) or _string_arg(body.get("session_id")):
         cmd.extend(["--resume", resume])
