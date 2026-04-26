@@ -120,6 +120,8 @@ class CodexProviderTests(unittest.TestCase):
         self.assertIn('provider: "openai-codex"', text)
         self.assertIn('default: "gpt-5.3-codex"', text)
         self.assertIn('base_url: "https://chatgpt.com/backend-api/codex"', text)
+        self.assertIn('external_dirs:', text)
+        self.assertIn('/.claude/skills/gstack', text)
         self.assertNotIn('provider: "custom"', text)
 
     def test_is_config_complete_requires_codex_oauth_when_codex_selected(self):

@@ -3,10 +3,14 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 # Node.js is required only at build time to compile the Hermes React dashboard.
 # We strip the source + apt lists afterwards to keep the image lean.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates git && \
+    apt-get install -y --no-install-recommends curl ca-certificates git unzip && \
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/opt/bun bash && \
+    ln -sf /opt/bun/bin/bun /usr/local/bin/bun && \
+    ln -sf /opt/bun/bin/bunx /usr/local/bin/bunx
 
 # Install hermes-agent (provides the `hermes` CLI) and pre-build its React
 # dashboard so `hermes dashboard` has nothing to build at runtime.
@@ -20,6 +24,12 @@ RUN git clone --depth 1 https://github.com/NousResearch/hermes-agent.git /opt/he
     npm install --silent && \
     npm run build && \
     rm -rf /opt/hermes-agent/web /opt/hermes-agent/.git /root/.npm
+
+RUN git clone --depth 1 https://github.com/garrytan/gstack /opt/gstack && \
+    cd /opt/gstack && \
+    bun install --frozen-lockfile && \
+    bun run build && \
+    rm -rf /opt/gstack/.git
 
 COPY requirements.txt /app/requirements.txt
 RUN uv pip install --system --no-cache -r /app/requirements.txt

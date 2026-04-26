@@ -59,6 +59,7 @@ HERMES_DASHBOARD_HOST = "127.0.0.1"
 HERMES_DASHBOARD_PORT = int(os.environ.get("HERMES_DASHBOARD_PORT", "9119"))
 HERMES_DASHBOARD_URL = f"http://{HERMES_DASHBOARD_HOST}:{HERMES_DASHBOARD_PORT}"
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
+GSTACK_SKILLS_DIR = Path(os.environ.get("HOME", "/data")) / ".claude" / "skills" / "gstack"
 
 # Mirror dashboard-ref-only/auth_proxy.py: strip only `host` (httpx sets it)
 # and `transfer-encoding` (httpx recomputes it from the body). Keep everything
@@ -418,6 +419,10 @@ agent:
   max_iterations: 50
 
 data_dir: "{HERMES_HOME}"
+
+skills:
+  external_dirs:
+    - "{GSTACK_SKILLS_DIR}"
 """)
 
 
