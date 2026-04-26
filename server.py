@@ -1231,7 +1231,8 @@ async def _run_hermes_chat(body: dict) -> tuple[int, dict]:
     if max_turns is not None:
         cmd.extend(["--max-turns", str(max_turns)])
 
-    print(f"[chat] exec: {' '.join(cmd[:3])} ...", flush=True)
+    preview = (message[:80] + "…") if len(message) > 80 else message
+    print(f"[chat] exec: {' '.join(cmd[:4])} {preview!r} ...", flush=True)
     chat_env = {**os.environ, "HERMES_HOME": HERMES_HOME}
     chat_env.update(read_env(ENV_FILE))
     proc = await asyncio.create_subprocess_exec(
