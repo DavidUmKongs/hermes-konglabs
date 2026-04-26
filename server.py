@@ -1101,12 +1101,8 @@ async def _run_hermes_chat(body: dict) -> tuple[int, dict]:
         cmd.extend(["--model", model])
     if provider := _string_arg(body.get("provider")):
         cmd.extend(["--provider", provider])
-    if base_url := _string_arg(body.get("base_url")):
-        cmd.extend(["--base_url", base_url])
-    if api_key := _string_arg(body.get("api_key")):
-        cmd.extend(["--api_key", api_key])
     if max_turns is not None:
-        cmd.extend(["--max_turns", str(max_turns)])
+        cmd.extend(["--max-turns", str(max_turns)])
 
     print(f"[chat] exec: {' '.join(cmd[:3])} ...", flush=True)
     proc = await asyncio.create_subprocess_exec(

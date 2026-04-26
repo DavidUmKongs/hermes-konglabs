@@ -157,7 +157,8 @@ The response is JSON:
 
 You can resume an existing Hermes session by including `"session_id"` (or
 `"resume"`), and optionally pass through `"skills"`, `"toolsets"`, `"model"`,
-`"provider"`, `"base_url"`, and `"max_turns"`.
+`"provider"`, and `"max_turns"`. Base URL and API keys are configured via the
+admin dashboard (`.env`) or Railway service variables, not per-request.
 
 ## Credits
 

@@ -53,7 +53,14 @@ class ChatApiTests(unittest.TestCase):
             self._login(client)
             response = client.post(
                 "/api/chat",
-                json={"message": "hello", "resume": "sess_1", "skills": ["plan", "wiki"]},
+                json={
+                    "message": "hello",
+                    "resume": "sess_1",
+                    "skills": ["plan", "wiki"],
+                    "max_turns": 5,
+                    "base_url": "should-be-ignored",
+                    "api_key": "should-be-ignored",
+                },
             )
 
         self.assertEqual(response.status_code, 200)
@@ -72,6 +79,11 @@ class ChatApiTests(unittest.TestCase):
         self.assertIn("sess_1", cmd)
         self.assertIn("--skills", cmd)
         self.assertIn("plan,wiki", cmd)
+        self.assertIn("--max-turns", cmd)
+        self.assertIn("5", cmd)
+        self.assertNotIn("--max_turns", cmd)
+        self.assertNotIn("--base_url", cmd)
+        self.assertNotIn("--api_key", cmd)
 
     def test_setup_api_chat_validates_missing_message(self):
         with self._client() as client:
