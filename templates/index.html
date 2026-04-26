@@ -806,14 +806,20 @@
           </div>
 
           <div class="field-gap" x-show="selectedProvider">
-            <label class="field-label">API Key</label>
+            <label class="field-label" x-show="providerMap[selectedProvider]?.key">API Key</label>
             <input type="password"
+                   x-show="providerMap[selectedProvider]?.key"
                    :value="selectedProvider ? (vars[providerMap[selectedProvider]?.key]||'') : ''"
                    @input="if(selectedProvider) vars[providerMap[selectedProvider].key]=$event.target.value"
                    :placeholder="selectedProvider ? (providerMap[selectedProvider]?.placeholder||'Paste your API key') : ''">
             <p class="hint" x-show="providerMap[selectedProvider]?.factory">
               Create/copy this from <code>app.factory.ai/settings/api-keys</code>. The server stores it as
               <code>FACTORY_API_KEY</code> and sends requests through a local authenticated Factory Droid bridge.
+            </p>
+            <p class="hint" x-show="providerMap[selectedProvider]?.oauth">
+              No API key is entered here. First connect <strong>OpenAI Codex</strong> in the
+              <a href="/?force=1" style="color:var(--accent2);text-decoration:none;font-weight:500;">Hermes Dashboard</a>
+              → <strong>Keys</strong>, then return here and save this provider choice.
             </p>
           </div>
 
@@ -835,15 +841,25 @@
 
           <div class="field-gap" x-show="selectedProvider">
             <label class="field-label">LLM Model</label>
-            <input type="text" :value="vars.LLM_MODEL||''" @input="vars.LLM_MODEL=$event.target.value"
+            <select x-show="providerMap[selectedProvider]?.models"
+                    x-model="vars.LLM_MODEL">
+              <option value="">— Select model —</option>
+              <template x-for="model in (providerMap[selectedProvider]?.models || [])" :key="model">
+                <option :value="model" x-text="model"></option>
+              </template>
+            </select>
+            <input type="text" x-show="!providerMap[selectedProvider]?.models"
+                   :value="vars.LLM_MODEL||''" @input="vars.LLM_MODEL=$event.target.value"
                    :placeholder="providerMap[selectedProvider]?.modelPlaceholder || (providerMap[selectedProvider]?.custom ? 'e.g. gemma4, gemma3:27b, qwen3:32b' : 'e.g. openai/gpt-4o-mini  or  deepseek/deepseek-chat')">
-            <p class="hint" x-show="!providerMap[selectedProvider]?.custom && !providerMap[selectedProvider]?.factory">OpenRouter format: <code>provider/model-name</code></p>
+            <p class="hint" x-show="providerMap[selectedProvider]?.models">Pick from a curated list — no manual model typing required.</p>
+            <p class="hint" x-show="!providerMap[selectedProvider]?.custom && !providerMap[selectedProvider]?.factory && !providerMap[selectedProvider]?.models">OpenRouter format: <code>provider/model-name</code></p>
             <p class="hint" x-show="providerMap[selectedProvider]?.factory">
               Factory model ID, e.g. <code>gpt-5.4-mini</code>, <code>gpt-5.4</code>, <code>gpt-5.3-codex</code>,
               <code>kimi-k2.5</code>, or <code>minimax-m2.5</code>. Uses your Factory Droid plan allocation through
               <code>FACTORY_API_KEY</code>; no custom base URL is needed.
             </p>
             <p class="hint" x-show="providerMap[selectedProvider]?.custom">Model ID as returned by <code>GET /v1/models</code> on your server (Ollama: run <code>ollama list</code>).</p>
+            <p class="hint" x-show="providerMap[selectedProvider]?.oauth">Recommended Codex model IDs include <code>gpt-5.3-codex</code> and <code>gpt-5.2-codex</code>.</p>
           </div>
         </div>
 
@@ -1294,26 +1310,61 @@ function app() {
     tools,
 
     providerMap: {
-      'OpenRouter':       { key: 'OPENROUTER_API_KEY', placeholder: 'sk-or-...' },
-      'DeepSeek':         { key: 'DEEPSEEK_API_KEY',   placeholder: 'sk-...'    },
-      'DashScope':        { key: 'DASHSCOPE_API_KEY',  placeholder: ''          },
-      'GLM / Z.AI':       { key: 'GLM_API_KEY',        placeholder: ''          },
-      'Kimi':             { key: 'KIMI_API_KEY',       placeholder: ''          },
-      'MiniMax':          { key: 'MINIMAX_API_KEY',    placeholder: ''          },
-      'HuggingFace':      { key: 'HF_TOKEN',           placeholder: 'hf_...'    },
+      'OpenRouter':       {
+        key: 'OPENROUTER_API_KEY',
+        placeholder: 'sk-or-...',
+        models: ['google/gemma-3-1b-it:free', 'meta-llama/llama-3.1-8b-instruct:free', 'deepseek/deepseek-chat-v3-0324:free']
+      },
+      'DeepSeek':         {
+        key: 'DEEPSEEK_API_KEY',
+        placeholder: 'sk-...',
+        models: ['deepseek-chat', 'deepseek-reasoner']
+      },
+      'DashScope':        {
+        key: 'DASHSCOPE_API_KEY',
+        placeholder: '',
+        models: ['qwen-max', 'qwen-plus', 'qwen-turbo']
+      },
+      'GLM / Z.AI':       {
+        key: 'GLM_API_KEY',
+        placeholder: '',
+        models: ['glm-4.5', 'glm-4.5-air', 'glm-4.5v']
+      },
+      'Kimi':             {
+        key: 'KIMI_API_KEY',
+        placeholder: '',
+        models: ['kimi-k2-0905-preview', 'moonshot-v1-8k', 'moonshot-v1-32k']
+      },
+      'MiniMax':          {
+        key: 'MINIMAX_API_KEY',
+        placeholder: '',
+        models: ['MiniMax-M1', 'MiniMax-Text-01', 'abab6.5s-chat']
+      },
+      'HuggingFace':      {
+        key: 'HF_TOKEN',
+        placeholder: 'hf_...',
+        models: ['Qwen/Qwen2.5-Coder-32B-Instruct', 'meta-llama/Llama-3.1-8B-Instruct', 'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B']
+      },
       'Factory Droid':    {
         key: 'FACTORY_API_KEY',
         placeholder: 'Factory API key',
         factory: true,
-        modelPlaceholder: 'e.g. gpt-5.4-mini, gpt-5.4, gpt-5.3-codex, kimi-k2.5, minimax-m2.5'
+        models: ['gpt-5.4-mini', 'gpt-5.4', 'gpt-5.3-codex', 'kimi-k2.5', 'minimax-m2.5']
+      },
+      'OpenAI Codex (OAuth)': {
+        key: null,
+        oauth: true,
+        mode: 'openai-codex',
+        models: ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini']
       },
       // Custom = any OpenAI-compatible endpoint. `custom: true` flips the UI
       // into two-field mode (API key + Base URL) and unlocks `provider: custom`
       // in the server-side config.yaml write path.
-      'Custom Endpoint':  { key: 'OPENAI_API_KEY',     placeholder: 'Any string your server accepts (e.g. "ollama")', custom: true },
+      'Custom Endpoint':  { key: 'OPENAI_API_KEY',     placeholder: 'Any string your server accepts (e.g. "ollama")', custom: true, mode: 'custom' },
     },
 
     selectedProvider: '',
+    codexOAuthLoggedIn: false,
 
     channelsEnabled: {
       telegram: false, discord: false, slack: false,
@@ -1326,11 +1377,12 @@ function app() {
 
     get isSetupDone() {
       if (!this.vars.LLM_MODEL) return false;
+      if (this.providerMap[this.selectedProvider]?.oauth) return !!this.codexOAuthLoggedIn;
       // Custom endpoint needs BOTH the API key and a base URL —
       // matches is_config_complete() on the server.
       const hasCustom = !!(this.vars.OPENAI_API_KEY && this.vars.OPENAI_BASE_URL);
       const hasOther = Object.values(this.providerMap)
-        .filter(p => !p.custom)
+        .filter(p => !p.custom && !p.oauth)
         .some(p => !!this.vars[p.key]);
       return hasCustom || hasOther;
     },
@@ -1339,11 +1391,16 @@ function app() {
       // Clear keys from other providers when switching. Also clear the
       // OPENAI_BASE_URL when switching away from a custom provider so it
       // doesn't linger and silently trigger `provider: custom` on save.
-      const leavingCustom = !this.providerMap[this.selectedProvider]?.custom;
+      const provider = this.providerMap[this.selectedProvider] || {};
+      const leavingCustom = !provider.custom;
       for (const [name, p] of Object.entries(this.providerMap)) {
-        if (name !== this.selectedProvider) this.vars[p.key] = '';
+        if (name !== this.selectedProvider && p.key) this.vars[p.key] = '';
       }
       if (leavingCustom) this.vars.OPENAI_BASE_URL = '';
+      this.vars.LLM_PROVIDER_MODE = provider.mode || '';
+      if (provider.models?.length && !provider.models.includes(this.vars.LLM_MODEL)) {
+        this.vars.LLM_MODEL = provider.models[0];
+      }
     },
 
     clearChannel(ch) {
@@ -1377,19 +1434,24 @@ function app() {
         if (r.ok) {
           const d = await r.json();
           this.vars = d.vars || {};
+          this.codexOAuthLoggedIn = !!d.codex_oauth_logged_in;
+          this.selectedProvider = d.selected_provider || '';
           // Detect active provider. Prefer Custom Endpoint when both its API
           // key and base URL are set — otherwise a stale OPENAI_API_KEY would
           // bind the UI to Custom even when the user's actually using, say,
           // OpenRouter alongside a separately-set OPENAI_API_KEY.
-          const customEntry = Object.entries(this.providerMap).find(([, p]) => p.custom);
-          if (customEntry && this.vars.OPENAI_API_KEY && this.vars.OPENAI_BASE_URL) {
-            this.selectedProvider = customEntry[0];
-          } else {
-            for (const [name, p] of Object.entries(this.providerMap)) {
-              if (p.custom) continue;
-              if (this.vars[p.key]) { this.selectedProvider = name; break; }
+          if (!this.selectedProvider) {
+            const customEntry = Object.entries(this.providerMap).find(([, p]) => p.custom);
+            if (customEntry && this.vars.OPENAI_API_KEY && this.vars.OPENAI_BASE_URL) {
+              this.selectedProvider = customEntry[0];
+            } else {
+              for (const [name, p] of Object.entries(this.providerMap)) {
+                if (p.custom || p.oauth || !p.key) continue;
+                if (this.vars[p.key]) { this.selectedProvider = name; break; }
+              }
             }
           }
+          this.vars.LLM_PROVIDER_MODE = this.providerMap[this.selectedProvider]?.mode || this.vars.LLM_PROVIDER_MODE || '';
           // Detect active channels
           this.channelsEnabled = {
             telegram:   !!(this.vars.TELEGRAM_BOT_TOKEN),
@@ -1407,16 +1469,16 @@ function app() {
           // savedConfigComplete reflects the persisted server-side state.
           // Masked secrets from the server still show truthy, so this
           // mirrors the backend's is_config_complete() check.
-          const hasCustom = !!(this.vars.OPENAI_API_KEY && this.vars.OPENAI_BASE_URL);
-          const hasOther = Object.values(this.providerMap)
-            .filter(p => !p.custom)
-            .some(p => !!this.vars[p.key]);
-          this.savedConfigComplete = !!(this.vars.LLM_MODEL && (hasCustom || hasOther));
+          this.savedConfigComplete = this.isSetupDone;
         }
       } catch {}
     },
 
     async saveConfig() {
+      if (this.providerMap[this.selectedProvider]?.oauth && !this.codexOAuthLoggedIn) {
+        this.notify('OpenAI Codex OAuth is not connected yet — open Hermes Dashboard → Keys and connect it first.', false);
+        return;
+      }
       // Client-side guard against the single most common Custom Endpoint
       // mistake: pasting a localhost URL that Railway can't reach. We block
       // this before the PUT so the user gets immediate feedback instead of
@@ -1478,7 +1540,12 @@ function app() {
     async loadStatus() {
       try {
         const r = await fetch('/setup/api/status');
-        if (r.ok) { const d = await r.json(); this.status = d; this.gw = d.gateway||{}; }
+        if (r.ok) {
+          const d = await r.json();
+          this.status = d;
+          this.gw = d.gateway||{};
+          this.codexOAuthLoggedIn = !!d.providers?.['OpenAI Codex (OAuth)']?.configured;
+        }
       } catch {}
     },
 
