@@ -981,16 +981,28 @@
           <template x-for="(t, i) in tools" :key="t.key">
             <div>
               <div class="toggle-row" :style="i===tools.length-1 && !toolsEnabled[t.key] ? 'border-bottom:none' : ''"
-                   @click="toolsEnabled[t.key]=!toolsEnabled[t.key]; if(!toolsEnabled[t.key]) clearTool(t)">
+                   @click="toolsEnabled[t.key]=!toolsEnabled[t.key]; vars[t.key]=toolsEnabled[t.key] && t.kind==='toggle' ? 'true' : (t.kind==='toggle' ? '' : vars[t.key]); if(!toolsEnabled[t.key]) clearTool(t)">
                 <input type="checkbox" :checked="toolsEnabled[t.key]" @click.stop
-                       @change="toolsEnabled[t.key]=$event.target.checked; if(!toolsEnabled[t.key]) clearTool(t)">
+                       @change="toolsEnabled[t.key]=$event.target.checked; vars[t.key]=toolsEnabled[t.key] && t.kind==='toggle' ? 'true' : (t.kind==='toggle' ? '' : vars[t.key]); if(!toolsEnabled[t.key]) clearTool(t)">
                 <span class="toggle-label" x-text="t.label"></span>
               </div>
               <div class="toggle-body" x-show="toolsEnabled[t.key]"
                    :style="i===tools.length-1 ? 'border-bottom:none' : ''">
                 <div>
-                  <label class="field-label">API Key</label>
-                  <input :type="t.secret?'password':'text'" :value="vars[t.key]||''" @input="vars[t.key]=$event.target.value">
+                  <label class="field-label" x-text="t.kind==='toggle' ? 'Status' : 'API Key'"></label>
+                  <template x-if="t.kind==='toggle'">
+                    <div>
+                      <input type="text" value="Enabled via generated Hermes MCP config" disabled>
+                      <p class="hint" style="margin-top:8px;">
+                        Adds <code>mcp_servers.slack</code> with <code>auth: oauth</code> and the official
+                        Slack MCP endpoint. After saving, complete the OAuth flow from the Hermes runtime/logs.
+                        Slack currently restricts MCP to internal or Marketplace-published apps.
+                      </p>
+                    </div>
+                  </template>
+                  <template x-if="t.kind!=='toggle'">
+                    <input :type="t.secret?'password':'text'" :value="vars[t.key]||''" @input="vars[t.key]=$event.target.value">
+                  </template>
                 </div>
                 <div x-show="t.key==='BROWSERBASE_API_KEY'" class="field-gap">
                   <label class="field-label">Project ID</label>
@@ -1291,6 +1303,7 @@ function app() {
     { key: 'GITHUB_TOKEN',           label: 'GitHub',                     secret: true  },
     { key: 'VOICE_TOOLS_OPENAI_KEY', label: 'OpenAI Voice (Whisper/TTS)', secret: true  },
     { key: 'HONCHO_API_KEY',         label: 'Honcho (memory)',            secret: true  },
+    { key: 'SLACK_MCP_ENABLED',      label: 'Slack MCP',                  secret: false, kind: 'toggle' },
   ];
 
   return {
@@ -1464,7 +1477,9 @@ function app() {
           };
           // Detect active tools
           for (const t of this.tools) {
-            this.toolsEnabled[t.key] = !!(this.vars[t.key]);
+            this.toolsEnabled[t.key] = t.kind === 'toggle'
+              ? ['true', '1', 'yes', 'on'].includes(String(this.vars[t.key] || '').toLowerCase())
+              : !!(this.vars[t.key]);
           }
           // savedConfigComplete reflects the persisted server-side state.
           // Masked secrets from the server still show truthy, so this

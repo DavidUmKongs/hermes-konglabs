@@ -107,6 +107,7 @@ ENV_VARS = [
     ("GITHUB_TOKEN",             "GitHub token",             "tool",      True),
     ("VOICE_TOOLS_OPENAI_KEY",   "OpenAI (voice/TTS)",       "tool",      True),
     ("HONCHO_API_KEY",           "Honcho (memory)",          "tool",      True),
+    ("SLACK_MCP_ENABLED",        "Slack MCP",                "tool",      False),
     ("TELEGRAM_BOT_TOKEN",       "Bot Token",                "telegram",  True),
     ("TELEGRAM_ALLOWED_USERS",   "Allowed User IDs",         "telegram",  False),
     ("DISCORD_BOT_TOKEN",        "Bot Token",                "discord",   True),
@@ -360,6 +361,91 @@ def factory_droid_local_base_url(api_mode: str) -> str:
     return f"http://127.0.0.1:{port}{FACTORY_PROXY_PREFIX}/v1"
 
 
+SLACK_MCP_SERVER_NAME = "slack"
+SLACK_MCP_URL = "https://mcp.slack.com/mcp"
+
+
+def _looks_truthy(value: str | None) -> bool:
+    return bool(value) and str(value).strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _extract_top_level_block(text: str, key: str) -> str:
+    """Return the raw YAML block for a top-level key, if present."""
+    lines = text.splitlines()
+    start = None
+    for idx, line in enumerate(lines):
+        if re.match(rf"^{re.escape(key)}:\s*$", line):
+            start = idx
+            break
+    if start is None:
+        return ""
+    end = len(lines)
+    for idx in range(start + 1, len(lines)):
+        line = lines[idx]
+        if line and not line.startswith((" ", "\t")) and re.match(r"^[^#\s][^:]*:\s*(?:#.*)?$", line):
+            end = idx
+            break
+    return "\n".join(lines[start:end]).rstrip() + "\n"
+
+
+def _split_mcp_server_entries(block: str) -> tuple[list[str], dict[str, str]]:
+    """Split an `mcp_servers:` block into preserved preamble lines and raw entries."""
+    if not block:
+        return [], {}
+    lines = block.splitlines()
+    if not lines or lines[0].strip() != "mcp_servers:":
+        return [], {}
+
+    preamble: list[str] = []
+    entries: dict[str, str] = {}
+    current_name: str | None = None
+    current_lines: list[str] = []
+
+    for line in lines[1:]:
+        match = re.match(r"^  ([A-Za-z0-9_.-]+):\s*(?:#.*)?$", line)
+        if match:
+            if current_name is not None:
+                entries[current_name] = "\n".join(current_lines).rstrip()
+            current_name = match.group(1)
+            current_lines = [line]
+            continue
+        if current_name is None:
+            preamble.append(line)
+        else:
+            current_lines.append(line)
+
+    if current_name is not None:
+        entries[current_name] = "\n".join(current_lines).rstrip()
+    return preamble, entries
+
+
+def _render_slack_mcp_entry() -> str:
+    return (
+        f"  {SLACK_MCP_SERVER_NAME}:\n"
+        f"    url: {json.dumps(SLACK_MCP_URL)}\n"
+        f'    auth: "oauth"'
+    )
+
+
+def build_mcp_servers_block(data: dict[str, str], existing_config_text: str = "") -> str:
+    """Merge managed Slack MCP config with any pre-existing MCP servers."""
+    existing_block = _extract_top_level_block(existing_config_text, "mcp_servers")
+    preamble, entries = _split_mcp_server_entries(existing_block)
+
+    if _looks_truthy(data.get("SLACK_MCP_ENABLED")):
+        entries[SLACK_MCP_SERVER_NAME] = _render_slack_mcp_entry()
+    else:
+        entries.pop(SLACK_MCP_SERVER_NAME, None)
+
+    if not entries and not any(line.strip() for line in preamble):
+        return ""
+
+    rendered = ["mcp_servers:"]
+    rendered.extend(preamble)
+    rendered.extend(entries[name] for name in sorted(entries))
+    return "\n".join(rendered).rstrip() + "\n"
+
+
 def write_config_yaml(data: dict[str, str]) -> None:
     """Write a minimal config.yaml so hermes picks up the model and provider.
 
@@ -368,11 +454,16 @@ def write_config_yaml(data: dict[str, str]) -> None:
     Per Hermes's provider-runtime resolver, `model.provider` takes precedence
     over auto-detection from .env keys, so this prevents a stale OpenRouter
     key from hijacking requests intended for the user's custom endpoint.
+
+    Preserve any existing MCP servers and merge the managed Slack MCP entry
+    when the setup UI enables it.
     """
     model = data.get("LLM_MODEL", "").strip()
     base_url = data.get(CUSTOM_BASE_URL_KEY, "").strip()
     factory_key = data.get(FACTORY_PROVIDER_KEY, "").strip()
     selected_mode = _selected_provider_mode(data)
+    config_path = Path(HERMES_HOME) / "config.yaml"
+    existing_config = config_path.read_text() if config_path.exists() else ""
     if selected_mode == CODEX_PROVIDER_ID:
         model_block = (
             f'model:\n'
@@ -410,24 +501,18 @@ def write_config_yaml(data: dict[str, str]) -> None:
             f'  default: {json.dumps(model)}\n'
             f'  provider: "auto"\n'
         )
-    config_path = Path(HERMES_HOME) / "config.yaml"
+    mcp_block = build_mcp_servers_block(data, existing_config)
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(f"""\
-{model_block}
-terminal:
-  backend: "local"
-  timeout: 60
-  cwd: "/tmp"
-
-agent:
-  max_iterations: 50
-
-data_dir: "{HERMES_HOME}"
-
-skills:
-  external_dirs:
-    - {json.dumps(str(gstack_skills_dir()))}
-""")
+    parts = [
+        model_block.rstrip(),
+        'terminal:\n  backend: "local"\n  timeout: 60\n  cwd: "/tmp"',
+        "agent:\n  max_iterations: 50",
+        f"data_dir: {json.dumps(HERMES_HOME)}",
+        f"skills:\n  external_dirs:\n    - {json.dumps(str(gstack_skills_dir()))}",
+    ]
+    if mcp_block:
+        parts.append(mcp_block.rstrip())
+    config_path.write_text("\n\n".join(parts) + "\n")
 
 
 def write_env(path: Path, data: dict[str, str]) -> None:
