@@ -382,7 +382,15 @@ def _extract_top_level_block(text: str, key: str) -> str:
     end = len(lines)
     for idx in range(start + 1, len(lines)):
         line = lines[idx]
-        if line and not line.startswith((" ", "\t")) and re.match(r"^[^#\s][^:]*:\s*(?:#.*)?$", line):
+        # End the block at the first line that begins a new top-level YAML
+        # key. Match both bare keys (`terminal:`) and keys with scalar values
+        # (`data_dir: "/data/.hermes"`); skip blanks and full-line comments.
+        if (
+            line
+            and not line.startswith((" ", "\t"))
+            and not line.lstrip().startswith("#")
+            and re.match(r"^[A-Za-z0-9_.-]+:(\s|$)", line)
+        ):
             end = idx
             break
     return "\n".join(lines[start:end]).rstrip() + "\n"

@@ -175,6 +175,22 @@ mcp_servers:
         self.assertIn('@modelcontextprotocol/server-github', text)
         self.assertIn('  slack:', text)
 
+    def test_extract_top_level_block_stops_at_scalar_valued_key(self):
+        # Regression: end-detection must treat `data_dir: "..."` as the start
+        # of a new top-level section, not as part of mcp_servers.
+        text = """\
+mcp_servers:
+  github:
+    command: "npx"
+data_dir: "/data/.hermes"
+log_level: "info"
+"""
+        block = server._extract_top_level_block(text, "mcp_servers")
+
+        self.assertIn("github:", block)
+        self.assertNotIn("data_dir", block)
+        self.assertNotIn("log_level", block)
+
     def test_write_config_yaml_removes_managed_slack_mcp_when_disabled(self):
         existing = """\
 mcp_servers:
