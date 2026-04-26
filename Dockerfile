@@ -25,11 +25,16 @@ RUN git clone --depth 1 https://github.com/NousResearch/hermes-agent.git /opt/he
     npm run build && \
     rm -rf /opt/hermes-agent/web /opt/hermes-agent/.git /root/.npm
 
-RUN git clone --depth 1 https://github.com/garrytan/gstack /opt/gstack && \
+# Pin gstack to a known-good commit so each build is reproducible. The
+# upstream repo ships without a bun.lockb, so we cannot use
+# --frozen-lockfile; the SHA pin is what gives us repeatability instead.
+ARG GSTACK_REF=ed1e4be2f68bf977f1fa485eba94d89dbef5255c
+RUN git clone https://github.com/garrytan/gstack /opt/gstack && \
     cd /opt/gstack && \
-    bun install --frozen-lockfile && \
+    git checkout "$GSTACK_REF" && \
+    bun install && \
     bun run build && \
-    rm -rf /opt/gstack/.git
+    rm -rf /opt/gstack/.git /root/.bun
 
 COPY requirements.txt /app/requirements.txt
 RUN uv pip install --system --no-cache -r /app/requirements.txt
