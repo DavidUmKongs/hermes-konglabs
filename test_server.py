@@ -174,6 +174,7 @@ mcp_servers:
         self.assertIn('github:', text)
         self.assertIn('@modelcontextprotocol/server-github', text)
         self.assertIn('  slack:', text)
+        self.assertLess(text.index('  github:'), text.index('  slack:'))
 
     def test_extract_top_level_block_stops_at_scalar_valued_key(self):
         # Regression: end-detection must treat `data_dir: "..."` as the start
@@ -190,6 +191,52 @@ log_level: "info"
         self.assertIn("github:", block)
         self.assertNotIn("data_dir", block)
         self.assertNotIn("log_level", block)
+
+    def test_write_config_yaml_preserves_unmanaged_blocks_and_stops_at_scalar_key(self):
+        existing = """\
+mcp_servers:
+  github:
+    command: "npx"
+data_dir: "/custom/hermes"
+log_level: "info"
+"""
+        with TemporaryDirectory() as tmpdir, \
+                patch.object(server, "HERMES_HOME", tmpdir):
+            Path(tmpdir, "config.yaml").write_text(existing, encoding="utf-8")
+            server.write_config_yaml({
+                "LLM_MODEL": "demo-model",
+                "OPENROUTER_API_KEY": "sk-or-demo",
+                "SLACK_MCP_ENABLED": "true",
+            })
+
+            text = Path(tmpdir, "config.yaml").read_text(encoding="utf-8")
+
+        self.assertIn('  github:\n    command: "npx"', text)
+        self.assertNotIn('    data_dir: "/custom/hermes"', text)
+        self.assertNotIn('    log_level: "info"', text)
+        self.assertIn('log_level: "info"', text)
+
+    def test_write_config_yaml_preserves_existing_mcp_entry_order(self):
+        existing = """\
+mcp_servers:
+  zebra:
+    command: "z"
+  alpha:
+    command: "a"
+"""
+        with TemporaryDirectory() as tmpdir, \
+                patch.object(server, "HERMES_HOME", tmpdir):
+            Path(tmpdir, "config.yaml").write_text(existing, encoding="utf-8")
+            server.write_config_yaml({
+                "LLM_MODEL": "demo-model",
+                "OPENROUTER_API_KEY": "sk-or-demo",
+                "SLACK_MCP_ENABLED": "true",
+            })
+
+            text = Path(tmpdir, "config.yaml").read_text(encoding="utf-8")
+
+        self.assertLess(text.index("  zebra:"), text.index("  alpha:"))
+        self.assertLess(text.index("  alpha:"), text.index("  slack:"))
 
     def test_write_config_yaml_removes_managed_slack_mcp_when_disabled(self):
         existing = """\

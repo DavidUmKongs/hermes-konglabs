@@ -414,7 +414,7 @@ def _split_mcp_server_entries(block: str) -> tuple[list[str], dict[str, str]]:
         # only thing on the line (modulo a trailing comment). The renderer
         # always emits two spaces, but a manually edited config.yaml may use
         # four spaces or a tab.
-        match = re.match(r"^ +([A-Za-z0-9_.-]+):\s*(?:#.*)?$", line)
+        match = re.match(r"^[ \t]+([A-Za-z0-9_.-]+):\s*(?:#.*)?$", line)
         if match:
             if current_name is not None:
                 entries[current_name] = "\n".join(current_lines).rstrip()
@@ -454,12 +454,64 @@ def build_mcp_servers_block(data: dict[str, str], existing_config_text: str = ""
 
     rendered = ["mcp_servers:"]
     rendered.extend(preamble)
-    rendered.extend(entries[name] for name in sorted(entries))
+    rendered.extend(entries.values())
     return "\n".join(rendered).rstrip() + "\n"
 
 
+# Order matters when a managed key is being introduced for the first time:
+# new managed blocks are appended at the end of the file in this order, while
+# any block already present in the existing config keeps its original position.
+_MANAGED_CONFIG_KEYS = (
+    "model",
+    "custom_providers",
+    "terminal",
+    "agent",
+    "data_dir",
+    "skills",
+    "mcp_servers",
+)
+
+
+def _split_top_level_blocks(text: str) -> list[tuple[str, str]]:
+    """Return ordered (key, raw_block) tuples for each top-level YAML section.
+
+    Lines that appear before the first top-level key (e.g., a leading file
+    header comment) are returned under the synthetic key ``""`` so callers can
+    preserve them verbatim.
+    """
+    if not text.strip():
+        return []
+    blocks: list[tuple[str, str]] = []
+    current_key = ""
+    current_lines: list[str] = []
+
+    def _flush() -> None:
+        nonlocal current_key, current_lines
+        body = "\n".join(current_lines).rstrip()
+        if body:
+            blocks.append((current_key, body))
+        current_key = ""
+        current_lines = []
+
+    for line in text.splitlines():
+        if (
+            line
+            and not line.startswith((" ", "\t"))
+            and not line.lstrip().startswith("#")
+        ):
+            match = re.match(r"^([A-Za-z0-9_.-]+):(\s|$)", line)
+            if match:
+                _flush()
+                current_key = match.group(1)
+                current_lines = [line]
+                continue
+        current_lines.append(line)
+    _flush()
+    return blocks
+
+
 def write_config_yaml(data: dict[str, str]) -> None:
-    """Write a minimal config.yaml so hermes picks up the model and provider.
+    """Write config.yaml so hermes picks up the model and provider.
 
     When a custom OpenAI-compatible endpoint is configured (OPENAI_BASE_URL is
     non-empty), we write `provider: custom` and `base_url: <url>` explicitly.
@@ -467,8 +519,10 @@ def write_config_yaml(data: dict[str, str]) -> None:
     over auto-detection from .env keys, so this prevents a stale OpenRouter
     key from hijacking requests intended for the user's custom endpoint.
 
-    Preserve any existing MCP servers and merge the managed Slack MCP entry
-    when the setup UI enables it.
+    Only the blocks listed in ``_MANAGED_CONFIG_KEYS`` are owned by the
+    wrapper; any other top-level section in an existing ``config.yaml`` is
+    preserved verbatim. Existing MCP servers are also kept and the managed
+    Slack MCP entry is merged in when the setup UI enables it.
     """
     model = data.get("LLM_MODEL", "").strip()
     base_url = data.get(CUSTOM_BASE_URL_KEY, "").strip()
@@ -476,12 +530,14 @@ def write_config_yaml(data: dict[str, str]) -> None:
     selected_mode = _selected_provider_mode(data)
     config_path = Path(HERMES_HOME) / "config.yaml"
     existing_config = config_path.read_text() if config_path.exists() else ""
+
+    custom_providers_block = ""
     if selected_mode == CODEX_PROVIDER_ID:
         model_block = (
             f'model:\n'
             f'  default: {json.dumps(model)}\n'
             f'  provider: {json.dumps(CODEX_PROVIDER_ID)}\n'
-            f'  base_url: {json.dumps(_codex_runtime_base_url())}\n'
+            f'  base_url: {json.dumps(_codex_runtime_base_url())}'
         )
     elif selected_mode == FACTORY_PROVIDER_ID and factory_key and not base_url:
         api_mode = factory_droid_api_mode_for_model(model)
@@ -491,40 +547,62 @@ def write_config_yaml(data: dict[str, str]) -> None:
             f'  default: {json.dumps(model)}\n'
             f'  provider: {json.dumps(FACTORY_PROVIDER_ID)}\n'
             f'  base_url: {json.dumps(local_base_url)}\n'
-            f'  api_mode: {json.dumps(api_mode)}\n'
+            f'  api_mode: {json.dumps(api_mode)}'
+        )
+        custom_providers_block = (
             f'custom_providers:\n'
             f'  - name: {json.dumps(FACTORY_PROVIDER_LABEL)}\n'
             f'    provider_key: {json.dumps(FACTORY_PROVIDER_ID)}\n'
             f'    base_url: {json.dumps(local_base_url)}\n'
             f'    key_env: {json.dumps(FACTORY_PROVIDER_KEY)}\n'
             f'    model: {json.dumps(model)}\n'
-            f'    api_mode: {json.dumps(api_mode)}\n'
+            f'    api_mode: {json.dumps(api_mode)}'
         )
     elif selected_mode == CUSTOM_PROVIDER_ID and base_url:
         model_block = (
             f'model:\n'
             f'  default: {json.dumps(model)}\n'
             f'  provider: "custom"\n'
-            f'  base_url: {json.dumps(base_url)}\n'
+            f'  base_url: {json.dumps(base_url)}'
         )
     else:
         model_block = (
             f'model:\n'
             f'  default: {json.dumps(model)}\n'
-            f'  provider: "auto"\n'
+            f'  provider: "auto"'
         )
+
+    managed_blocks: dict[str, str] = {
+        "model": model_block,
+        "terminal": 'terminal:\n  backend: "local"\n  timeout: 60\n  cwd: "/tmp"',
+        "agent": "agent:\n  max_iterations: 50",
+        "data_dir": f"data_dir: {json.dumps(HERMES_HOME)}",
+        "skills": f"skills:\n  external_dirs:\n    - {json.dumps(str(gstack_skills_dir()))}",
+    }
+    if custom_providers_block:
+        managed_blocks["custom_providers"] = custom_providers_block
     mcp_block = build_mcp_servers_block(data, existing_config)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    parts = [
-        model_block.rstrip(),
-        'terminal:\n  backend: "local"\n  timeout: 60\n  cwd: "/tmp"',
-        "agent:\n  max_iterations: 50",
-        f"data_dir: {json.dumps(HERMES_HOME)}",
-        f"skills:\n  external_dirs:\n    - {json.dumps(str(gstack_skills_dir()))}",
-    ]
     if mcp_block:
-        parts.append(mcp_block.rstrip())
-    config_path.write_text("\n\n".join(parts) + "\n")
+        managed_blocks["mcp_servers"] = mcp_block.rstrip()
+
+    seen_managed: set[str] = set()
+    out_blocks: list[str] = []
+    for key, raw in _split_top_level_blocks(existing_config):
+        if key in _MANAGED_CONFIG_KEYS:
+            if key in managed_blocks and key not in seen_managed:
+                out_blocks.append(managed_blocks[key])
+                seen_managed.add(key)
+            # Otherwise: a managed block we no longer emit (e.g., disabled
+            # custom_providers or removed Slack MCP) — drop it intentionally.
+            continue
+        out_blocks.append(raw)
+    for key in _MANAGED_CONFIG_KEYS:
+        if key in managed_blocks and key not in seen_managed:
+            out_blocks.append(managed_blocks[key])
+            seen_managed.add(key)
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text("\n\n".join(out_blocks) + "\n")
 
 
 def write_env(path: Path, data: dict[str, str]) -> None:
