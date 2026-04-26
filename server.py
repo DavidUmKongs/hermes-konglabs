@@ -107,6 +107,8 @@ ENV_VARS = [
     ("DISCORD_ALLOWED_USERS",    "Allowed User IDs",         "discord",   False),
     ("SLACK_BOT_TOKEN",          "Bot Token (xoxb-...)",     "slack",     True),
     ("SLACK_APP_TOKEN",          "App Token (xapp-...)",     "slack",     True),
+    ("SLACK_ALLOWED_USERS",      "Allowed Member IDs",       "slack",     False),
+    ("SLACK_HOME_CHANNEL",       "Home Channel ID",          "slack",     False),
     ("WHATSAPP_ENABLED",         "Enable WhatsApp",          "whatsapp",  False),
     ("EMAIL_ADDRESS",            "Email Address",            "email",     False),
     ("EMAIL_PASSWORD",           "Email Password",           "email",     True),
