@@ -890,6 +890,8 @@
             <div class="field-grid-2">
               <div><label class="field-label">Bot Token (xoxb-…)</label><input type="password" :value="vars.SLACK_BOT_TOKEN||''" @input="vars.SLACK_BOT_TOKEN=$event.target.value" placeholder="xoxb-..."></div>
               <div><label class="field-label">App Token (xapp-…)</label><input type="password" :value="vars.SLACK_APP_TOKEN||''" @input="vars.SLACK_APP_TOKEN=$event.target.value" placeholder="xapp-..."></div>
+              <div><label class="field-label">Allowed Member IDs</label><input type="text" :value="vars.SLACK_ALLOWED_USERS||''" @input="vars.SLACK_ALLOWED_USERS=$event.target.value" placeholder="U01ABC2DEF3,U04XYZ..."><p class="hint">Required for DMs. Use <code>*</code> to allow all users. Find your Member ID in Slack profile → ⋯ → Copy member ID.</p></div>
+              <div><label class="field-label">Home Channel ID <span style="opacity:0.5;">(optional)</span></label><input type="text" :value="vars.SLACK_HOME_CHANNEL||''" @input="vars.SLACK_HOME_CHANNEL=$event.target.value" placeholder="C01234567890"><p class="hint">Default channel for cron / scheduled messages.</p></div>
             </div>
           </div>
 
@@ -1348,7 +1350,7 @@ function app() {
       const keysMap = {
         telegram:   ['TELEGRAM_BOT_TOKEN','TELEGRAM_ALLOWED_USERS'],
         discord:    ['DISCORD_BOT_TOKEN','DISCORD_ALLOWED_USERS'],
-        slack:      ['SLACK_BOT_TOKEN','SLACK_APP_TOKEN'],
+        slack:      ['SLACK_BOT_TOKEN','SLACK_APP_TOKEN','SLACK_ALLOWED_USERS','SLACK_HOME_CHANNEL'],
         email:      ['EMAIL_ADDRESS','EMAIL_PASSWORD','EMAIL_IMAP_HOST','EMAIL_SMTP_HOST'],
         mattermost: ['MATTERMOST_URL','MATTERMOST_TOKEN'],
         matrix:     ['MATRIX_HOMESERVER','MATRIX_ACCESS_TOKEN','MATRIX_USER_ID'],
