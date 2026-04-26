@@ -374,7 +374,7 @@ def _extract_top_level_block(text: str, key: str) -> str:
     lines = text.splitlines()
     start = None
     for idx, line in enumerate(lines):
-        if re.match(rf"^{re.escape(key)}:\s*$", line):
+        if re.match(rf"^{re.escape(key)}:\s*(?:#.*)?$", line):
             start = idx
             break
     if start is None:
