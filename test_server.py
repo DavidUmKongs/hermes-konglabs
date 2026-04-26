@@ -49,7 +49,10 @@ class ChatApiTests(unittest.TestCase):
         )
         create_proc = AsyncMock(return_value=proc)
 
-        with self._client() as client, patch("server.asyncio.create_subprocess_exec", create_proc):
+        env_overrides = {"OPENROUTER_API_KEY": "from-env-file", "LLM_MODEL": "demo-model"}
+        with self._client() as client, \
+                patch("server.asyncio.create_subprocess_exec", create_proc), \
+                patch("server.read_env", return_value=env_overrides):
             self._login(client)
             response = client.post(
                 "/api/chat",
@@ -84,6 +87,10 @@ class ChatApiTests(unittest.TestCase):
         self.assertNotIn("--max_turns", cmd)
         self.assertNotIn("--base_url", cmd)
         self.assertNotIn("--api_key", cmd)
+        env = create_proc.await_args.kwargs["env"]
+        self.assertEqual(env["OPENROUTER_API_KEY"], "from-env-file")
+        self.assertEqual(env["LLM_MODEL"], "demo-model")
+        self.assertEqual(env["HERMES_HOME"], server.HERMES_HOME)
 
     def test_setup_api_chat_validates_missing_message(self):
         with self._client() as client:

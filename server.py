@@ -1105,11 +1105,13 @@ async def _run_hermes_chat(body: dict) -> tuple[int, dict]:
         cmd.extend(["--max-turns", str(max_turns)])
 
     print(f"[chat] exec: {' '.join(cmd[:3])} ...", flush=True)
+    chat_env = {**os.environ, "HERMES_HOME": HERMES_HOME}
+    chat_env.update(read_env(ENV_FILE))
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env=os.environ.copy(),
+        env=chat_env,
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
