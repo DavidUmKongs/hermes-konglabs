@@ -422,7 +422,7 @@ data_dir: "{HERMES_HOME}"
 
 skills:
   external_dirs:
-    - "{GSTACK_SKILLS_DIR}"
+    - {json.dumps(str(GSTACK_SKILLS_DIR))}
 """)
 
 
