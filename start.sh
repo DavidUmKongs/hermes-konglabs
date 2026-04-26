@@ -8,7 +8,7 @@ set -e
 mkdir -p /data/.hermes/cron /data/.hermes/sessions /data/.hermes/logs \
          /data/.hermes/memories /data/.hermes/skills /data/.hermes/pairing \
          /data/.hermes/hooks /data/.hermes/image_cache /data/.hermes/audio_cache \
-         /data/.hermes/workspace /data/.claude/skills /data/.gstack
+         /data/.hermes/workspace /data/.claude/skills
 
 # Expose the vendored gstack repo at the path its skills expect
 # (~/.claude/skills/gstack) and let Hermes discover every SKILL.md from there
