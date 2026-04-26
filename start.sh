@@ -13,8 +13,12 @@ mkdir -p /data/.hermes/cron /data/.hermes/sessions /data/.hermes/logs \
 # Expose the vendored gstack repo at the path its skills expect
 # (~/.claude/skills/gstack) and let Hermes discover every SKILL.md from there
 # through skills.external_dirs in config.yaml.
-if [ ! -e /data/.claude/skills/gstack ] && [ -d /opt/gstack ]; then
-  ln -s /opt/gstack /data/.claude/skills/gstack
+if [ -d /opt/gstack ]; then
+  # -f: replace any existing target, -n: don't follow if the destination is
+  # already a symlink to a directory. This keeps the mount in sync across
+  # image upgrades and avoids "File exists" failures from broken symlinks
+  # that would otherwise abort startup under `set -e`.
+  ln -sfn /opt/gstack /data/.claude/skills/gstack
 fi
 
 if [ ! -f /data/.hermes/config.yaml ] && [ -f /opt/hermes-agent/cli-config.yaml.example ]; then
