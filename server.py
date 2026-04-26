@@ -410,7 +410,11 @@ def _split_mcp_server_entries(block: str) -> tuple[list[str], dict[str, str]]:
     current_lines: list[str] = []
 
     for line in lines[1:]:
-        match = re.match(r"^  ([A-Za-z0-9_.-]+):\s*(?:#.*)?$", line)
+        # Tolerate any non-zero indentation as long as the entry header is the
+        # only thing on the line (modulo a trailing comment). The renderer
+        # always emits two spaces, but a manually edited config.yaml may use
+        # four spaces or a tab.
+        match = re.match(r"^ +([A-Za-z0-9_.-]+):\s*(?:#.*)?$", line)
         if match:
             if current_name is not None:
                 entries[current_name] = "\n".join(current_lines).rstrip()
