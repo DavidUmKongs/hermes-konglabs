@@ -401,7 +401,7 @@ def _split_mcp_server_entries(block: str) -> tuple[list[str], dict[str, str]]:
     if not block:
         return [], {}
     lines = block.splitlines()
-    if not lines or lines[0].strip() != "mcp_servers:":
+    if not lines or lines[0].split("#", 1)[0].strip() != "mcp_servers:":
         return [], {}
 
     preamble: list[str] = []
