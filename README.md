@@ -72,8 +72,20 @@ All other configuration (LLM provider, model, channels, tools) is managed throug
 ## Supported Providers
 
 OpenRouter, DeepSeek, DashScope, GLM / Z.AI, Kimi, MiniMax, HuggingFace,
+**OpenAI Codex (OAuth)**,
 **Factory Droid**,
 **Custom Endpoint** (any OpenAI-compatible API — Ollama, vLLM, llama.cpp, LM Studio, …).
+
+### Using OpenAI Codex OAuth
+
+1. Open the proxied **Hermes Dashboard** (`/?force=1`)
+2. Go to **Keys**
+3. Connect **OpenAI Codex (ChatGPT)**
+4. Return to **Setup**, choose **OpenAI Codex (OAuth)**, pick a model from the dropdown, and save
+
+The wrapper then writes `model.provider: "openai-codex"` into
+`/data/.hermes/config.yaml`, so gateway restarts keep using Codex instead of
+falling back to `auto` or a stale custom endpoint.
 
 ### Using Factory Droid allocation
 

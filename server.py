@@ -58,6 +58,7 @@ PAIRING_TTL = 3600
 HERMES_DASHBOARD_HOST = "127.0.0.1"
 HERMES_DASHBOARD_PORT = int(os.environ.get("HERMES_DASHBOARD_PORT", "9119"))
 HERMES_DASHBOARD_URL = f"http://{HERMES_DASHBOARD_HOST}:{HERMES_DASHBOARD_PORT}"
+DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 
 # Mirror dashboard-ref-only/auth_proxy.py: strip only `host` (httpx sets it)
 # and `transfer-encoding` (httpx recomputes it from the body). Keep everything
@@ -134,6 +135,10 @@ FACTORY_PROVIDER_KEY = "FACTORY_API_KEY"
 FACTORY_PROVIDER_ID = "factory-droid"
 FACTORY_PROVIDER_LABEL = "Factory Droid"
 FACTORY_PROXY_PREFIX = "/factory-droid"
+INTERNAL_PROVIDER_MODE_KEY = "LLM_PROVIDER_MODE"
+CUSTOM_PROVIDER_ID = "custom"
+CODEX_PROVIDER_ID = "openai-codex"
+CODEX_PROVIDER_LABEL = "OpenAI Codex (OAuth)"
 
 # Factory's Droid allocation is exposed to Hermes through a local, authenticated
 # compatibility proxy.  Hermes sees a named provider (`factory-droid`) rather
@@ -195,6 +200,23 @@ PROVIDER_DISPLAY = {
     "HF_TOKEN":            "Hugging Face",
     "FACTORY_API_KEY":     FACTORY_PROVIDER_LABEL,
 }
+SETUP_PROVIDER_SPECS = (
+    {"name": "OpenRouter", "mode": "openrouter", "key": "OPENROUTER_API_KEY"},
+    {"name": "DeepSeek", "mode": "deepseek", "key": "DEEPSEEK_API_KEY"},
+    {"name": "DashScope", "mode": "dashscope", "key": "DASHSCOPE_API_KEY"},
+    {"name": "GLM / Z.AI", "mode": "glm", "key": "GLM_API_KEY"},
+    {"name": "Kimi", "mode": "kimi", "key": "KIMI_API_KEY"},
+    {"name": "MiniMax", "mode": "minimax", "key": "MINIMAX_API_KEY"},
+    {"name": "HuggingFace", "mode": "huggingface", "key": "HF_TOKEN"},
+    {"name": FACTORY_PROVIDER_LABEL, "mode": FACTORY_PROVIDER_ID, "key": FACTORY_PROVIDER_KEY},
+    {"name": CODEX_PROVIDER_LABEL, "mode": CODEX_PROVIDER_ID, "key": None},
+    {"name": "Custom Endpoint", "mode": CUSTOM_PROVIDER_ID, "key": CUSTOM_PROVIDER_KEY},
+)
+SETUP_PROVIDER_BY_MODE = {spec["mode"]: spec for spec in SETUP_PROVIDER_SPECS}
+SETUP_PROVIDER_BY_KEY = {
+    spec["key"]: spec for spec in SETUP_PROVIDER_SPECS
+    if spec["key"]
+}
 CHANNEL_MAP  = {
     "Telegram":    "TELEGRAM_BOT_TOKEN",
     "Discord":     "DISCORD_BOT_TOKEN",
@@ -221,6 +243,80 @@ def read_env(path: Path) -> dict[str, str]:
             v = v[1:-1]
         out[k.strip()] = v
     return out
+
+
+def _current_model_provider_from_config() -> str:
+    """Best-effort read of the current model.provider from config.yaml."""
+    config_path = Path(HERMES_HOME) / "config.yaml"
+    try:
+        text = config_path.read_text()
+    except OSError:
+        return ""
+    match = re.search(r"(?ms)^model:\n(?P<body>(?:^[ \t].*(?:\n|$))*)", text)
+    if not match:
+        return ""
+    body = match.group("body")
+    provider = re.search(r'(?m)^[ \t]+provider:\s*["\']?([^"\']+)["\']?\s*$', body)
+    return provider.group(1).strip() if provider else ""
+
+
+def _codex_oauth_status() -> dict[str, object]:
+    """Best-effort snapshot of Hermes Codex OAuth readiness."""
+    try:
+        from hermes_cli.auth import get_codex_auth_status
+    except Exception:
+        return {"logged_in": False}
+    try:
+        status = get_codex_auth_status()
+        return status if isinstance(status, dict) else {"logged_in": False}
+    except Exception:
+        return {"logged_in": False}
+
+
+def _codex_oauth_configured() -> bool:
+    return bool(_codex_oauth_status().get("logged_in"))
+
+
+def _codex_runtime_base_url() -> str:
+    """Resolve the effective Codex backend URL if Hermes already knows it."""
+    try:
+        from hermes_cli.auth import resolve_codex_runtime_credentials
+    except Exception:
+        return DEFAULT_CODEX_BASE_URL
+    try:
+        creds = resolve_codex_runtime_credentials()
+        return str(creds.get("base_url") or DEFAULT_CODEX_BASE_URL).strip()
+    except Exception:
+        return DEFAULT_CODEX_BASE_URL
+
+
+def _selected_provider_mode(data: dict[str, str] | None = None) -> str:
+    """Resolve the setup-selected provider, preferring explicit wrapper state."""
+    if data is None:
+        data = read_env(ENV_FILE)
+
+    explicit_mode = str(data.get(INTERNAL_PROVIDER_MODE_KEY, "")).strip()
+    if explicit_mode:
+        return explicit_mode
+
+    base_url = str(data.get(CUSTOM_BASE_URL_KEY, "")).strip()
+    if str(data.get(FACTORY_PROVIDER_KEY, "")).strip() and not base_url:
+        return FACTORY_PROVIDER_ID
+    if str(data.get(CUSTOM_PROVIDER_KEY, "")).strip() and base_url:
+        return CUSTOM_PROVIDER_ID
+
+    for key, spec in SETUP_PROVIDER_BY_KEY.items():
+        if str(data.get(key, "")).strip():
+            return str(spec["mode"])
+    config_provider = _current_model_provider_from_config()
+    if config_provider in {FACTORY_PROVIDER_ID, CUSTOM_PROVIDER_ID, CODEX_PROVIDER_ID}:
+        return config_provider
+    return ""
+
+
+def _selected_provider_name(data: dict[str, str] | None = None) -> str:
+    spec = SETUP_PROVIDER_BY_MODE.get(_selected_provider_mode(data))
+    return str(spec["name"]) if spec else ""
 
 
 def factory_droid_api_mode_for_model(model: str) -> str:
@@ -271,7 +367,15 @@ def write_config_yaml(data: dict[str, str]) -> None:
     model = data.get("LLM_MODEL", "").strip()
     base_url = data.get(CUSTOM_BASE_URL_KEY, "").strip()
     factory_key = data.get(FACTORY_PROVIDER_KEY, "").strip()
-    if factory_key and not base_url:
+    selected_mode = _selected_provider_mode(data)
+    if selected_mode == CODEX_PROVIDER_ID:
+        model_block = (
+            f'model:\n'
+            f'  default: {json.dumps(model)}\n'
+            f'  provider: {json.dumps(CODEX_PROVIDER_ID)}\n'
+            f'  base_url: {json.dumps(_codex_runtime_base_url())}\n'
+        )
+    elif selected_mode == FACTORY_PROVIDER_ID and factory_key and not base_url:
         api_mode = factory_droid_api_mode_for_model(model)
         local_base_url = factory_droid_local_base_url(api_mode)
         model_block = (
@@ -288,7 +392,7 @@ def write_config_yaml(data: dict[str, str]) -> None:
             f'    model: {json.dumps(model)}\n'
             f'    api_mode: {json.dumps(api_mode)}\n'
         )
-    elif base_url:
+    elif selected_mode == CUSTOM_PROVIDER_ID and base_url:
         model_block = (
             f'model:\n'
             f'  default: {json.dumps(model)}\n'
@@ -365,7 +469,15 @@ def is_config_complete(data: dict[str, str] | None = None) -> bool:
     if data is None:
         data = read_env(ENV_FILE)
     has_model = bool(data.get("LLM_MODEL"))
+    selected_mode = _selected_provider_mode(data)
     has_custom = bool(data.get(CUSTOM_PROVIDER_KEY)) and bool(data.get(CUSTOM_BASE_URL_KEY))
+    if selected_mode == CODEX_PROVIDER_ID:
+        return has_model and _codex_oauth_configured()
+    if selected_mode == CUSTOM_PROVIDER_ID:
+        return has_model and has_custom
+    selected_spec = SETUP_PROVIDER_BY_MODE.get(selected_mode)
+    if selected_spec and selected_spec.get("key"):
+        return has_model and bool(data.get(str(selected_spec["key"])))
     has_other_provider = any(
         data.get(k) for k in PROVIDER_KEYS
         if k not in (CUSTOM_PROVIDER_KEY, CUSTOM_BASE_URL_KEY)
@@ -923,7 +1035,12 @@ async def api_config_get(request: Request):
     async with cfg_lock:
         data = read_env(ENV_FILE)
     defs = [{"key": k, "label": l, "category": c, "secret": s} for k, l, c, s in ENV_VARS]
-    return JSONResponse({"vars": mask(data), "defs": defs})
+    return JSONResponse({
+        "vars": mask(data),
+        "defs": defs,
+        "selected_provider": _selected_provider_name(data),
+        "codex_oauth_logged_in": _codex_oauth_configured(),
+    })
 
 
 async def api_config_put(request: Request):
@@ -963,6 +1080,7 @@ async def api_status(request: Request):
             k.replace("_API_KEY", "").replace("_TOKEN", "").replace("_", " ").title()
         )
         providers[label] = {"configured": bool(data.get(k))}
+    providers[CODEX_PROVIDER_LABEL] = {"configured": _codex_oauth_configured()}
     providers["Custom Endpoint"] = {
         "configured": bool(data.get(CUSTOM_PROVIDER_KEY)) and bool(data.get(CUSTOM_BASE_URL_KEY))
     }
