@@ -1117,7 +1117,7 @@ async def _run_hermes_chat(body: dict) -> tuple[int, dict]:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
     except asyncio.TimeoutError:
         proc.kill()
-        await proc.communicate()
+        await proc.wait()
         return 504, {"error": f"Hermes chat timed out after {timeout_seconds}s"}
 
     stdout_text = ANSI_ESCAPE.sub("", stdout.decode("utf-8", errors="replace")).strip()
