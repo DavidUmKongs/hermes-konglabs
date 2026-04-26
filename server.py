@@ -1026,6 +1026,121 @@ def _platforms(suffix: str) -> list[str]:
     return [f.stem.rsplit(f"-{suffix}", 1)[0] for f in PAIRING_DIR.glob(f"*-{suffix}.json")]
 
 
+def _string_arg(value) -> str | None:
+    """Normalize a request value into a stripped string, if present."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+    value = str(value).strip()
+    return value or None
+
+
+def _csv_arg(value) -> str | None:
+    """Normalize a string/list payload into a comma-separated CLI flag value."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+    if isinstance(value, (list, tuple, set)):
+        parts = [str(item).strip() for item in value if str(item).strip()]
+        return ",".join(parts) or None
+    value = str(value).strip()
+    return value or None
+
+
+def _extract_session_id(stderr_text: str) -> str | None:
+    cleaned = ANSI_ESCAPE.sub("", stderr_text or "")
+    match = re.search(r"session_id:\s*([^\s]+)", cleaned)
+    return match.group(1) if match else None
+
+
+async def _run_hermes_chat(body: dict) -> tuple[int, dict]:
+    """Run a single Hermes CLI turn and return an HTTP status + JSON payload."""
+    message = _string_arg(body.get("message")) or _string_arg(body.get("query"))
+    if not message and isinstance(body.get("messages"), list):
+        user_chunks = []
+        for item in body["messages"]:
+            if not isinstance(item, dict) or item.get("role") != "user":
+                continue
+            content = item.get("content")
+            if isinstance(content, str) and content.strip():
+                user_chunks.append(content.strip())
+        if user_chunks:
+            message = "\n\n".join(user_chunks)
+
+    if not message:
+        return 400, {"error": "Missing message"}
+
+    timeout_seconds = body.get("timeout_seconds", os.environ.get("HERMES_CHAT_TIMEOUT", 300))
+    try:
+        timeout_seconds = max(1, int(timeout_seconds))
+    except (TypeError, ValueError):
+        return 400, {"error": "timeout_seconds must be an integer"}
+
+    max_turns = body.get("max_turns")
+    if max_turns is not None:
+        try:
+            max_turns = int(max_turns)
+        except (TypeError, ValueError):
+            return 400, {"error": "max_turns must be an integer"}
+        if max_turns < 1:
+            return 400, {"error": "max_turns must be >= 1"}
+
+    cmd = ["hermes", "--quiet", "-q", message]
+
+    if resume := _string_arg(body.get("resume")) or _string_arg(body.get("session_id")):
+        cmd.extend(["--resume", resume])
+    if toolsets := _csv_arg(body.get("toolsets")):
+        cmd.extend(["--toolsets", toolsets])
+    if skills := _csv_arg(body.get("skills")):
+        cmd.extend(["--skills", skills])
+    if model := _string_arg(body.get("model")):
+        cmd.extend(["--model", model])
+    if provider := _string_arg(body.get("provider")):
+        cmd.extend(["--provider", provider])
+    if max_turns is not None:
+        cmd.extend(["--max-turns", str(max_turns)])
+
+    print(f"[chat] exec: {' '.join(cmd[:3])} ...", flush=True)
+    chat_env = {**os.environ, "HERMES_HOME": HERMES_HOME}
+    chat_env.update(read_env(ENV_FILE))
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=chat_env,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return 504, {"error": f"Hermes chat timed out after {timeout_seconds}s"}
+
+    stdout_text = ANSI_ESCAPE.sub("", stdout.decode("utf-8", errors="replace")).strip()
+    stderr_text = ANSI_ESCAPE.sub("", stderr.decode("utf-8", errors="replace")).strip()
+    session_id = _extract_session_id(stderr_text)
+
+    if proc.returncode != 0:
+        detail = stderr_text or stdout_text or "Hermes chat failed"
+        print(f"[chat] hermes failed rc={proc.returncode} detail={detail!r}", flush=True)
+        return 502, {
+            "error": "Hermes chat failed",
+            "detail": detail,
+            "returncode": proc.returncode,
+            "session_id": session_id,
+        }
+
+    return 200, {
+        "ok": True,
+        "response": stdout_text,
+        "session_id": session_id,
+    }
+
+
 async def api_pairing_pending(request: Request):
     if err := guard(request): return err
     now = time.time()
@@ -1094,6 +1209,19 @@ async def api_pairing_revoke(request: Request):
         del approved[uid]
         _wjson(p, approved)
     return JSONResponse({"ok": True})
+
+
+async def api_chat(request: Request):
+    """POST /api/chat or /setup/api/chat — terminal-friendly one-shot Hermes call."""
+    if err := guard(request): return err
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "JSON body must be an object"}, status_code=400)
+    status_code, payload = await _run_hermes_chat(body)
+    return JSONResponse(payload, status_code=status_code)
 
 
 # ── Reverse proxy → Hermes dashboard ──────────────────────────────────────────
@@ -1282,6 +1410,7 @@ routes = [
     Route("/setup/api/gateway/stop",            api_gw_stop,         methods=["POST"]),
     Route("/setup/api/gateway/restart",         api_gw_restart,      methods=["POST"]),
     Route("/setup/api/config/reset",            api_config_reset,    methods=["POST"]),
+    Route("/setup/api/chat",                    api_chat,            methods=["POST"]),
     Route("/setup/api/pairing/pending",         api_pairing_pending),
     Route("/setup/api/pairing/approve",         api_pairing_approve, methods=["POST"]),
     Route("/setup/api/pairing/deny",            api_pairing_deny,    methods=["POST"]),
@@ -1295,6 +1424,10 @@ routes = [
     # Factory Droid provider; external callers need the Factory API key bearer
     # token, so the route cannot be used as an unauthenticated public proxy.
     Route("/factory-droid/{path:path}",         route_factory_droid_proxy, methods=ANY_METHOD),
+
+    # Terminal-friendly one-shot chat endpoint. GET /api/chat still falls
+    # through to the Hermes dashboard route; only POST is intercepted here.
+    Route("/api/chat",                          api_chat,            methods=["POST"]),
 
     # Root: redirect to /setup if unconfigured, otherwise proxy the dashboard.
     Route("/",                                  route_root,          methods=ANY_METHOD),

@@ -132,6 +132,34 @@ docker run --rm -it -p 8080:8080 -e PORT=8080 -e ADMIN_PASSWORD=changeme -v herm
 
 Open `http://localhost:8080` and log in with `admin` / `changeme`.
 
+## Terminal Chat via HTTP
+
+For quick one-shot calls from a terminal, log in once to capture the wrapper
+cookie, then POST to the Railway wrapper's chat endpoint:
+
+```bash
+BASE="https://your-app.up.railway.app"
+
+curl -sS -c cookies.txt -X POST "$BASE/login" \
+  -d "username=admin&password=YOUR_PASSWORD" \
+  -o /dev/null
+
+curl -sS -b cookies.txt -X POST "$BASE/api/chat" \
+  -H "Content-Type: application/json" \
+  -d '{"message":"안녕"}'
+```
+
+The response is JSON:
+
+```json
+{"ok":true,"response":"...","session_id":"20260426_123456_abcd1234"}
+```
+
+You can resume an existing Hermes session by including `"session_id"` (or
+`"resume"`), and optionally pass through `"skills"`, `"toolsets"`, `"model"`,
+`"provider"`, and `"max_turns"`. Base URL and API keys are configured via the
+admin dashboard (`.env`) or Railway service variables, not per-request.
+
 ## Credits
 
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) by [Nous Research](https://nousresearch.com/)
