@@ -7,15 +7,18 @@ Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on [Railway]
 > Hermes Agent is an autonomous AI agent by [Nous Research](https://nousresearch.com/) that lives on your server, connects to your messaging channels (Telegram, Discord, Slack, etc.), and gets more capable the longer it runs.
 
 <p>
-  <a href="#hermes-agent--railway-template">
-    <img alt="This README - Railway Wrapper Guide" src="https://img.shields.io/badge/This%20README-Railway%20Wrapper%20Guide-111827?style=for-the-badge">
+  <a href="./README.md">
+    <img alt="English README - Railway Wrapper Guide" src="https://img.shields.io/badge/English-Railway%20Wrapper%20Guide-111827?style=for-the-badge">
+  </a>
+  <a href="./README.ko.md">
+    <img alt="Korean README - 한국어 가이드" src="https://img.shields.io/badge/한국어-가이드-0f766e?style=for-the-badge">
   </a>
   <a href="https://github.com/NousResearch/hermes-agent#readme">
     <img alt="Upstream Hermes README" src="https://img.shields.io/badge/Upstream-Hermes%20README-2563eb?style=for-the-badge">
   </a>
 </p>
 
-Use the links above like tabs: stay on this README for Railway wrapper setup, or jump to the upstream Hermes README for core Hermes features and native docs.
+Use the links above like tabs: stay on this README for the English Railway wrapper guide, switch to the Korean README for the translated version, or jump to the upstream Hermes README for core Hermes features and native docs.
 
 <!-- TODO: Add dashboard screenshot -->
 <!-- ![Dashboard](docs/dashboard.png) -->
@@ -327,7 +330,16 @@ git submodule status
 scripts/update-hermes-upstream.sh
 ```
 
-Bump to the latest upstream release tag:
+Follow the latest upstream `main`:
+
+```bash
+scripts/update-hermes-upstream.sh --main
+git add vendor/hermes-agent
+python3 -m unittest -v
+docker build -t hermes-agent .
+```
+
+If you prefer to stay on the latest upstream release tag instead:
 
 ```bash
 scripts/update-hermes-upstream.sh --latest-tag
@@ -336,12 +348,10 @@ python3 -m unittest -v
 docker build -t hermes-agent .
 ```
 
-If you need a specific upstream revision instead of the latest tag:
+If you need a specific upstream revision instead of `main` or the latest tag:
 
 ```bash
 scripts/update-hermes-upstream.sh v2026.4.23
-# or
-scripts/update-hermes-upstream.sh --main
 ```
 
 After any bump, verify the wrapper still works before opening a PR:
