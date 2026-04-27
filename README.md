@@ -129,6 +129,28 @@ Telegram, Discord, Slack, WhatsApp, Email, Mattermost, Matrix
 
 Parallel (search), Firecrawl (scraping), Tavily (search), FAL (image gen), Browserbase, GitHub, OpenAI Voice (Whisper/TTS), Honcho (memory)
 
+## Slack MCP
+
+The setup UI can now enable the official Slack MCP endpoint by generating this
+Hermes config entry:
+
+```yaml
+mcp_servers:
+  slack:
+    url: "https://mcp.slack.com/mcp"
+    auth: "oauth"
+```
+
+Important caveats:
+
+- Slack MCP is separate from the normal Slack bot channel settings.
+- After saving, you must complete Hermes's MCP OAuth flow for the `slack`
+  server from the runtime/browser flow that Hermes opens or logs.
+- Slack currently limits MCP access to internal apps and Slack
+  Marketplace-published apps.
+- This wrapper now preserves existing `mcp_servers` entries in
+  `/data/.hermes/config.yaml` instead of overwriting them on every save.
+
 ## Architecture
 
 ```
