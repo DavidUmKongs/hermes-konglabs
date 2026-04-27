@@ -6,6 +6,17 @@ Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on [Railway]
 
 > Hermes Agent is an autonomous AI agent by [Nous Research](https://nousresearch.com/) that lives on your server, connects to your messaging channels (Telegram, Discord, Slack, etc.), and gets more capable the longer it runs.
 
+<p>
+  <a href="#hermes-agent--railway-template">
+    <img alt="This README - Railway Wrapper Guide" src="https://img.shields.io/badge/This%20README-Railway%20Wrapper%20Guide-111827?style=for-the-badge">
+  </a>
+  <a href="https://github.com/NousResearch/hermes-agent#readme">
+    <img alt="Upstream Hermes README" src="https://img.shields.io/badge/Upstream-Hermes%20README-2563eb?style=for-the-badge">
+  </a>
+</p>
+
+Use the links above like tabs: stay on this README for Railway wrapper setup, or jump to the upstream Hermes README for core Hermes features and native docs.
+
 <!-- TODO: Add dashboard screenshot -->
 <!-- ![Dashboard](docs/dashboard.png) -->
 
@@ -23,6 +34,7 @@ Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on [Railway]
 - **Slack MCP Controls** — enable Slack's official MCP server, expose a native-dashboard helper, and test Railway-friendly header auth without overwriting existing `mcp_servers`
 - **Terminal Chat API** — send authenticated one-shot Hermes chat requests over HTTP and resume sessions from the CLI
 - **Bundled gstack Skills** — ships with the public `garrytan/gstack` skill bundle prewired as a default external Hermes skills directory
+- **Pinned Hermes Upstream** — tracks `NousResearch/hermes-agent` as a git submodule so wrapper changes and upstream bumps stay reviewable
 - **Basic Auth** — password-protected admin panel
 - **Reset Config** — one-click reset to start fresh
 
@@ -77,6 +89,39 @@ Message your Telegram bot. If you're a new user, a pairing request will appear i
 | `ADMIN_PASSWORD` | *(auto-generated)* | Basic auth password — if unset, a random password is printed to logs |
 
 All other configuration (LLM provider, model, channels, tools) is managed through the admin dashboard.
+
+## Hermes Upstream Tracking
+
+This repository is a **Railway wrapper around Hermes**, not a long-lived fork
+of the full upstream codebase. The actual Hermes source is pinned as a git
+submodule at:
+
+```text
+vendor/hermes-agent
+```
+
+That split is intentional:
+
+- wrapper-owned changes live here (`server.py`, `templates/`, `start.sh`,
+  Docker/Railway wiring)
+- Hermes core behavior should usually be updated by bumping the submodule
+- every deployed upstream revision is reviewable via `git submodule status`
+
+Fresh clones must initialize the submodule before local builds:
+
+```bash
+git submodule update --init --recursive
+```
+
+To inspect or bump the current upstream pin:
+
+```bash
+scripts/update-hermes-upstream.sh
+scripts/update-hermes-upstream.sh --latest-tag
+```
+
+Avoid editing files inside `vendor/hermes-agent` directly unless you are
+intentionally maintaining a wrapper-local fork.
 
 ## Bundled Default Skills
 
@@ -224,14 +269,21 @@ Railway Container
 │   ├── /            — Admin dashboard (Basic Auth)
 │   ├── /health      — Health check (no auth)
 │   └── /api/*       — Config, status, logs, gateway, pairing
-└── hermes gateway   — Managed as async subprocess
+├── vendor/hermes-agent  — Pinned upstream Hermes source (git submodule)
+└── hermes gateway       — Managed as async subprocess
 ```
 
-The admin server runs on `$PORT` and manages the Hermes gateway as a child process. Config is stored in `/data/.hermes/.env` and `/data/.hermes/config.yaml`. Gateway stdout/stderr is captured into a ring buffer and streamed to the Logs panel.
+The admin server runs on `$PORT` and manages the Hermes gateway as a child
+process. Hermes itself is installed from the pinned
+`vendor/hermes-agent` submodule during image build, and the prebuilt upstream
+dashboard bundle is served at runtime through the wrapper proxy. Config is
+stored in `/data/.hermes/.env` and `/data/.hermes/config.yaml`. Gateway
+stdout/stderr is captured into a ring buffer and streamed to the Logs panel.
 
 ## Running Locally
 
 ```bash
+git submodule update --init --recursive
 docker build -t hermes-agent .
 docker run --rm -it -p 8080:8080 -e PORT=8080 -e ADMIN_PASSWORD=changeme -v hermes-data:/data hermes-agent
 ```
@@ -265,6 +317,39 @@ You can resume an existing Hermes session by including `"session_id"` (or
 `"resume"`), and optionally pass through `"skills"`, `"toolsets"`, `"model"`,
 `"provider"`, and `"max_turns"`. Base URL and API keys are configured via the
 admin dashboard (`.env`) or Railway service variables, not per-request.
+
+## Updating Hermes Upstream
+
+Review the current pinned upstream revision:
+
+```bash
+git submodule status
+scripts/update-hermes-upstream.sh
+```
+
+Bump to the latest upstream release tag:
+
+```bash
+scripts/update-hermes-upstream.sh --latest-tag
+git add vendor/hermes-agent
+python3 -m unittest -v
+docker build -t hermes-agent .
+```
+
+If you need a specific upstream revision instead of the latest tag:
+
+```bash
+scripts/update-hermes-upstream.sh v2026.4.23
+# or
+scripts/update-hermes-upstream.sh --main
+```
+
+After any bump, verify the wrapper still works before opening a PR:
+
+- setup UI loads
+- `hermes gateway` still starts through the wrapper
+- `hermes dashboard` still works behind the proxy
+- wrapper chat endpoint still succeeds
 
 ## Recent Updates (PR #1–#11)
 

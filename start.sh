@@ -10,6 +10,15 @@ mkdir -p /data/.hermes/cron /data/.hermes/sessions /data/.hermes/logs \
          /data/.hermes/hooks /data/.hermes/image_cache /data/.hermes/audio_cache \
          /data/.hermes/workspace /data/.claude/skills
 
+HERMES_SOURCE_DIR="${HERMES_SOURCE_DIR:-/opt/hermes-agent}"
+HERMES_WEB_DIST="${HERMES_WEB_DIST:-$HERMES_SOURCE_DIR/web/dist}"
+export HERMES_SOURCE_DIR HERMES_WEB_DIST
+
+if [ ! -d "$HERMES_SOURCE_DIR" ]; then
+  echo "[start] Missing Hermes source directory: $HERMES_SOURCE_DIR" >&2
+  exit 1
+fi
+
 # Expose the vendored gstack repo at the path its skills expect
 # (~/.claude/skills/gstack) and let Hermes discover every SKILL.md from there
 # through skills.external_dirs in config.yaml.
@@ -21,8 +30,8 @@ if [ -d /opt/gstack ]; then
   ln -sfn /opt/gstack /data/.claude/skills/gstack
 fi
 
-if [ ! -f /data/.hermes/config.yaml ] && [ -f /opt/hermes-agent/cli-config.yaml.example ]; then
-  cp /opt/hermes-agent/cli-config.yaml.example /data/.hermes/config.yaml
+if [ ! -f /data/.hermes/config.yaml ] && [ -f "$HERMES_SOURCE_DIR/cli-config.yaml.example" ]; then
+  cp "$HERMES_SOURCE_DIR/cli-config.yaml.example" /data/.hermes/config.yaml
 fi
 
 # Seed default provider (Ollama @ home PC, gemma4:26b) on first boot so the

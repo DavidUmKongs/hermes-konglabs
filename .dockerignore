@@ -1,0 +1,6 @@
+.git
+.omx
+.factory
+.gstack
+__pycache__/
+*.pyc
