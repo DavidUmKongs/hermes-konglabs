@@ -330,7 +330,16 @@ git submodule status
 scripts/update-hermes-upstream.sh
 ```
 
-Bump to the latest upstream release tag:
+Follow the latest upstream `main`:
+
+```bash
+scripts/update-hermes-upstream.sh --main
+git add vendor/hermes-agent
+python3 -m unittest -v
+docker build -t hermes-agent .
+```
+
+If you prefer to stay on the latest upstream release tag instead:
 
 ```bash
 scripts/update-hermes-upstream.sh --latest-tag
@@ -339,12 +348,10 @@ python3 -m unittest -v
 docker build -t hermes-agent .
 ```
 
-If you need a specific upstream revision instead of the latest tag:
+If you need a specific upstream revision instead of `main` or the latest tag:
 
 ```bash
 scripts/update-hermes-upstream.sh v2026.4.23
-# or
-scripts/update-hermes-upstream.sh --main
 ```
 
 After any bump, verify the wrapper still works before opening a PR:

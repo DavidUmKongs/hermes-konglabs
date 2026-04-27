@@ -291,7 +291,16 @@ git submodule status
 scripts/update-hermes-upstream.sh
 ```
 
-최신 upstream release tag로 bump:
+최신 upstream `main`을 따라가려면:
+
+```bash
+scripts/update-hermes-upstream.sh --main
+git add vendor/hermes-agent
+python3 -m unittest -v
+docker build -t hermes-agent .
+```
+
+최신 upstream release tag에 맞추고 싶다면:
 
 ```bash
 scripts/update-hermes-upstream.sh --latest-tag
@@ -300,12 +309,10 @@ python3 -m unittest -v
 docker build -t hermes-agent .
 ```
 
-특정 upstream revision으로 지정하고 싶다면:
+`main`이나 latest tag 대신 특정 upstream revision을 지정하고 싶다면:
 
 ```bash
 scripts/update-hermes-upstream.sh v2026.4.23
-# 또는
-scripts/update-hermes-upstream.sh --main
 ```
 
 bump 후 최소 검증:
