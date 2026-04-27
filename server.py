@@ -1244,6 +1244,7 @@ async def api_config_put(request: Request):
                     merged[k] = v
             write_env(ENV_FILE, merged)
             write_config_yaml(merged)
+        _invalidate_dashboard_cache()
         if restart:
             asyncio.create_task(gw.restart())
         return JSONResponse({"ok": True, "restarting": restart})
@@ -1305,6 +1306,7 @@ async def api_config_reset(request: Request):
         if ENV_FILE.exists():
             ENV_FILE.unlink()
         write_config_yaml({})
+    _invalidate_dashboard_cache()
     return JSONResponse({"ok": True})
 
 
@@ -1767,15 +1769,31 @@ def _dashboard_enhancements_html() -> str:
 """
 
 
+_dashboard_enhancements_cache: str | None = None
+
+
+def _invalidate_dashboard_cache() -> None:
+    global _dashboard_enhancements_cache
+    _dashboard_enhancements_cache = None
+
+
+def _get_dashboard_enhancements() -> str:
+    global _dashboard_enhancements_cache
+    if _dashboard_enhancements_cache is None:
+        _dashboard_enhancements_cache = _dashboard_enhancements_html()
+    return _dashboard_enhancements_cache
+
+
 def _decorate_dashboard_html(content: bytes) -> bytes:
     """Inject wrapper-owned dashboard accessibility helpers into HTML."""
-    if b"</body>" not in content:
+    if b"</body>" not in content.lower():
         return content
     try:
         text = content.decode("utf-8", errors="replace")
-        text = text.replace("</body>", _dashboard_enhancements_html() + "</body>", 1)
+        prefix, suffix = text.rsplit("</body>", 1)
+        text = f"{prefix}{_get_dashboard_enhancements()}</body>{suffix}"
         return text.encode("utf-8")
-    except Exception:
+    except (UnicodeDecodeError, UnicodeEncodeError):
         return content
 
 

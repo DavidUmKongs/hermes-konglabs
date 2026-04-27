@@ -312,6 +312,7 @@ class DashboardProxyTests(unittest.TestCase):
         with TemporaryDirectory() as tmpdir, \
                 patch.object(server, "HERMES_HOME", tmpdir), \
                 patch.object(server, "ENV_FILE", Path(tmpdir) / ".env"):
+            server._invalidate_dashboard_cache()
             html = b"<html><body><main>dashboard</main></body></html>"
 
             decorated = server._decorate_dashboard_html(html).decode("utf-8")
@@ -321,6 +322,58 @@ class DashboardProxyTests(unittest.TestCase):
         self.assertIn('id="hermes-slack-mcp-toggle"', decorated)
         self.assertIn("Slack MCP", decorated)
         self.assertIn("Open Setup", decorated)
+
+    def test_slack_mcp_dashboard_state_env_only(self):
+        with TemporaryDirectory() as tmpdir, \
+                patch.object(server, "HERMES_HOME", tmpdir), \
+                patch.object(server, "ENV_FILE", Path(tmpdir) / ".env"):
+            Path(tmpdir, ".env").write_text("SLACK_MCP_ENABLED=true\n", encoding="utf-8")
+
+            state = server._slack_mcp_dashboard_state()
+
+        self.assertTrue(state["enabled"])
+        self.assertTrue(state["enabled_in_env"])
+        self.assertFalse(state["configured_in_yaml"])
+        self.assertEqual(state["label"], "Slack MCP ✓")
+
+    def test_slack_mcp_dashboard_state_yaml_only(self):
+        with TemporaryDirectory() as tmpdir, \
+                patch.object(server, "HERMES_HOME", tmpdir), \
+                patch.object(server, "ENV_FILE", Path(tmpdir) / ".env"):
+            Path(tmpdir, "config.yaml").write_text(
+                'mcp_servers:\n'
+                '  slack:\n'
+                '    url: "https://mcp.slack.com/mcp"\n'
+                '    auth: "oauth"\n',
+                encoding="utf-8",
+            )
+
+            state = server._slack_mcp_dashboard_state()
+
+        self.assertTrue(state["enabled"])
+        self.assertFalse(state["enabled_in_env"])
+        self.assertTrue(state["configured_in_yaml"])
+
+    def test_slack_mcp_dashboard_state_disabled(self):
+        with TemporaryDirectory() as tmpdir, \
+                patch.object(server, "HERMES_HOME", tmpdir), \
+                patch.object(server, "ENV_FILE", Path(tmpdir) / ".env"):
+            state = server._slack_mcp_dashboard_state()
+
+        self.assertFalse(state["enabled"])
+        self.assertEqual(state["status"], "Not enabled")
+
+    def test_decorate_dashboard_html_disabled_no_checkmark(self):
+        with TemporaryDirectory() as tmpdir, \
+                patch.object(server, "HERMES_HOME", tmpdir), \
+                patch.object(server, "ENV_FILE", Path(tmpdir) / ".env"):
+            server._invalidate_dashboard_cache()
+            html = b"<html><body><main>dashboard</main></body></html>"
+
+            decorated = server._decorate_dashboard_html(html).decode("utf-8")
+
+        self.assertNotIn("Slack MCP \u2713", decorated)
+        self.assertIn("Not enabled", decorated)
 
 
 if __name__ == "__main__":
