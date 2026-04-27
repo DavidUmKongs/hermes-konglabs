@@ -12,11 +12,17 @@ Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on [Railway]
 ## Features
 
 - **Admin Dashboard** — dark-themed UI to configure providers, channels, tools, and manage the gateway
-- **One-Page Setup** — provider dropdown, checkbox-based channel/tool toggles — no config files to edit
+- **One-Page Setup** — provider dropdown, curated model pickers, checkbox-based channel/tool toggles — no config files to edit
+- **Auto-Bootstrap on Fresh Deploys** — empty Railway volumes can seed a default Ollama-compatible provider and auto-start Hermes on first boot
+- **Expanded Provider Support** — OpenRouter, OpenAI Codex (OAuth), Factory Droid, and Custom Endpoint providers are all available directly in setup
 - **Gateway Management** — start, stop, restart the Hermes gateway from the browser
 - **Live Status** — stat cards for gateway state, uptime, model, and pending pairing requests
 - **Live Logs** — streaming gateway log viewer
 - **User Pairing** — approve or deny users who message your bot, revoke access anytime
+- **Slack DM Controls** — configure allowed Slack member IDs and an optional home channel from the dashboard
+- **Slack MCP Toggle** — enable Slack's official MCP server without overwriting your existing `mcp_servers` config
+- **Terminal Chat API** — send authenticated one-shot Hermes chat requests over HTTP and resume sessions from the CLI
+- **Bundled gstack Skills** — ships with the public `garrytan/gstack` skill bundle prewired as a default external Hermes skills directory
 - **Basic Auth** — password-protected admin panel
 - **Reset Config** — one-click reset to start fresh
 
@@ -52,6 +58,9 @@ Hermes Agent interacts entirely through messaging channels — there is no chat 
 2. **Messaging Channel** — check Telegram, paste the Bot Token from BotFather
 3. Click **Save & Start** — the gateway will start and your bot goes live
 
+> Fresh Railway volumes can auto-seed a default Ollama-compatible provider on first boot.
+> Override it with `OLLAMA_HOST`, `OLLAMA_MODEL`, and `OLLAMA_API_KEY` as Railway service variables, or replace it from the dashboard at any time.
+
 ### 5. Start Chatting
 
 Message your Telegram bot. If you're a new user, a pairing request will appear in the admin dashboard under **Users** — click **Approve**, and you're in.
@@ -75,6 +84,22 @@ This image also ships the public [`garrytan/gstack`](https://github.com/garrytan
 skill bundle as a default external Hermes skill directory. On boot, the repo is
 exposed at `~/.claude/skills/gstack` and added to `skills.external_dirs`, so the
 gstack skills are available without any manual install step.
+
+## First-Boot Default Provider Seeding
+
+On a brand-new Railway deploy with an empty `/data` volume, `start.sh` can seed
+`/data/.hermes/.env` so Hermes is immediately runnable without completing the
+setup wizard first. The default seed is aimed at an Ollama-compatible endpoint:
+
+- `LLM_MODEL=gemma4:26b`
+- `OPENAI_API_KEY=ollama`
+- `OPENAI_BASE_URL=${OLLAMA_HOST}/v1`
+
+Behavior notes:
+
+- Seeding only runs when no saved `LLM_MODEL` exists, so redeploys do not clobber an existing setup.
+- You can override the seed with Railway service variables: `OLLAMA_HOST`, `OLLAMA_MODEL`, and `OLLAMA_API_KEY`.
+- If your local model is not directly reachable from Railway, use a public tunnel URL for `OLLAMA_HOST`.
 
 ## Supported Providers
 
@@ -124,6 +149,21 @@ The **LLM Model** field must match the ID reported by `GET /v1/models` on your s
 ## Supported Channels
 
 Telegram, Discord, Slack, WhatsApp, Email, Mattermost, Matrix
+
+### Slack DMs
+
+To make Slack DMs actually reach Hermes, configure these in the dashboard's Slack card:
+
+- **Allowed Member IDs** (`SLACK_ALLOWED_USERS`) — paste your Slack member ID, or use `*` for broad testing
+- **Home Channel ID** (`SLACK_HOME_CHANNEL`) — optional default channel for scheduled / cron-style messages
+
+Slack app requirements:
+
+- `im:history`, `im:read`, `im:write` scopes
+- `message.im` event subscription
+- **Messages Tab** enabled in App Home
+
+If `SLACK_ALLOWED_USERS` is empty, Hermes may treat inbound DMs as unauthorized pairing attempts instead of normal chat messages.
 
 ## Supported Tool Integrations
 
@@ -200,6 +240,18 @@ You can resume an existing Hermes session by including `"session_id"` (or
 `"resume"`), and optionally pass through `"skills"`, `"toolsets"`, `"model"`,
 `"provider"`, and `"max_turns"`. Base URL and API keys are configured via the
 admin dashboard (`.env`) or Railway service variables, not per-request.
+
+## Recent Updates (PR #1–#9)
+
+- **PR #1 — Custom Endpoint provider**: added first-class support for OpenAI-compatible endpoints such as Ollama, vLLM, llama.cpp, and LM Studio, including Base URL validation and local-model docs.
+- **PR #2 — Factory Droid provider**: added a dedicated Factory Droid setup path backed by `FACTORY_API_KEY` and a local authenticated bridge instead of treating it as a generic custom endpoint.
+- **PR #3 — First-boot Ollama seeding**: fresh Railway volumes can now seed a default Ollama-compatible provider and auto-start Hermes without manual setup.
+- **PR #4 — Slack DM config fix**: exposed `SLACK_ALLOWED_USERS` and `SLACK_HOME_CHANNEL` in the dashboard so Slack DMs and scheduled messages can be configured correctly.
+- **PR #5 — Wrapper-backed terminal chat**: added authenticated `POST /api/chat` and `POST /setup/api/chat` endpoints for one-shot Hermes chats and resumable sessions from the CLI.
+- **PR #6 — Codex OAuth provider**: added first-class OpenAI Codex (OAuth) setup support and kept Codex selected across config regeneration and restarts.
+- **PR #7 — Bundled gstack skills**: vendored the public `garrytan/gstack` bundle into the image and auto-wired it into Hermes as a default external skills directory.
+- **PR #8 — Current Hermes CLI compatibility**: fixed the wrapper chat command so `/api/chat` continues to work with the current `hermes chat -Q -q ...` CLI invocation shape.
+- **PR #9 — Slack MCP support**: added a setup toggle for the official Slack MCP endpoint and preserved existing `mcp_servers` entries when regenerating Hermes config.
 
 ## Credits
 
