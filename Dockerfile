@@ -24,7 +24,7 @@ COPY vendor/hermes-agent /opt/hermes-agent
 RUN cd ${HERMES_SOURCE_DIR} && \
     uv pip install --system --no-cache -e ".[all]" && \
     cd ${HERMES_SOURCE_DIR}/web && \
-    npm ci --silent && \
+    if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then npm ci --silent; else npm install --no-audit --no-fund --silent; fi && \
     npm run build && \
     rm -rf ${HERMES_SOURCE_DIR}/.git ${HERMES_SOURCE_DIR}/web/node_modules /root/.npm
 

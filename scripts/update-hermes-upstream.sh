@@ -8,7 +8,7 @@ SUBMODULE_DIR="$ROOT/$SUBMODULE_PATH"
 cd "$ROOT"
 git submodule update --init --recursive "$SUBMODULE_PATH"
 
-git -C "$SUBMODULE_DIR" fetch --tags origin main >/dev/null
+git -C "$SUBMODULE_DIR" fetch --tags --all >/dev/null
 
 current_sha="$(git -C "$SUBMODULE_DIR" rev-parse --short HEAD)"
 current_desc="$(git -C "$SUBMODULE_DIR" describe --tags --always --dirty 2>/dev/null || git -C "$SUBMODULE_DIR" rev-parse --short HEAD)"
