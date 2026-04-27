@@ -1,7 +1,7 @@
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 # Node.js is required only at build time to compile the Hermes React dashboard.
-# We strip the source + apt lists afterwards to keep the image lean.
+# We strip package-manager caches afterwards to keep the image lean.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl ca-certificates git unzip && \
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
@@ -12,18 +12,21 @@ RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/opt/bun bash && \
     ln -sf /opt/bun/bin/bun /usr/local/bin/bun && \
     ln -sf /opt/bun/bin/bunx /usr/local/bin/bunx
 
-# Install hermes-agent (provides the `hermes` CLI) and pre-build its React
-# dashboard so `hermes dashboard` has nothing to build at runtime.
-# Deleting web/ afterwards makes hermes's internal _build_web_ui skip the
-# rebuild step (it early-returns when package.json is absent), so container
-# startup is fast and no runtime npm dependency is needed.
-RUN git clone --depth 1 https://github.com/NousResearch/hermes-agent.git /opt/hermes-agent && \
-    cd /opt/hermes-agent && \
+ENV HERMES_SOURCE_DIR=/opt/hermes-agent
+ENV HERMES_WEB_DIST=/opt/hermes-agent/web/dist
+
+# Install Hermes from the repo's pinned submodule instead of cloning an opaque
+# upstream revision during image build. Build the upstream dashboard once here
+# and point runtime at the emitted dist bundle via HERMES_WEB_DIST so
+# `hermes dashboard` skips runtime npm work while we keep the source tree
+# available for debugging and future upstream diffs.
+COPY vendor/hermes-agent /opt/hermes-agent
+RUN cd ${HERMES_SOURCE_DIR} && \
     uv pip install --system --no-cache -e ".[all]" && \
-    cd /opt/hermes-agent/web && \
-    npm install --silent && \
+    cd ${HERMES_SOURCE_DIR}/web && \
+    npm ci --silent && \
     npm run build && \
-    rm -rf /opt/hermes-agent/web /opt/hermes-agent/.git /root/.npm
+    rm -rf ${HERMES_SOURCE_DIR}/.git ${HERMES_SOURCE_DIR}/web/node_modules /root/.npm
 
 # Pin gstack to a known-good commit so each build is reproducible. The
 # upstream repo ships without a bun.lockb, so we cannot use
