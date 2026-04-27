@@ -287,5 +287,41 @@ mcp_servers:
             self.assertEqual(server._selected_provider_mode(data), "openrouter")
 
 
+class DashboardProxyTests(unittest.TestCase):
+    def test_slack_mcp_dashboard_state_detects_enabled_env_and_config(self):
+        with TemporaryDirectory() as tmpdir, \
+                patch.object(server, "HERMES_HOME", tmpdir), \
+                patch.object(server, "ENV_FILE", Path(tmpdir) / ".env"):
+            Path(tmpdir, ".env").write_text("SLACK_MCP_ENABLED=true\n", encoding="utf-8")
+            Path(tmpdir, "config.yaml").write_text(
+                'mcp_servers:\n'
+                '  slack:\n'
+                '    url: "https://mcp.slack.com/mcp"\n'
+                '    auth: "oauth"\n',
+                encoding="utf-8",
+            )
+
+            state = server._slack_mcp_dashboard_state()
+
+        self.assertTrue(state["enabled"])
+        self.assertTrue(state["enabled_in_env"])
+        self.assertTrue(state["configured_in_yaml"])
+        self.assertEqual(state["status"], "Enabled")
+
+    def test_decorate_dashboard_html_injects_contrast_and_slack_helper(self):
+        with TemporaryDirectory() as tmpdir, \
+                patch.object(server, "HERMES_HOME", tmpdir), \
+                patch.object(server, "ENV_FILE", Path(tmpdir) / ".env"):
+            html = b"<html><body><main>dashboard</main></body></html>"
+
+            decorated = server._decorate_dashboard_html(html).decode("utf-8")
+
+        self.assertIn('id="hermes-dashboard-a11y"', decorated)
+        self.assertIn('id="hermes-back-widget"', decorated)
+        self.assertIn('id="hermes-slack-mcp-toggle"', decorated)
+        self.assertIn("Slack MCP", decorated)
+        self.assertIn("Open Setup", decorated)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1534,14 +1534,6 @@ _WIDGET_LINK_STYLE = (
     "color:#c9d1d9;text-decoration:none;display:inline-flex;"
     "align-items:center;gap:6px;"
 )
-BACK_TO_SETUP_WIDGET = (
-    '<div id="hermes-back-widget" style="position:fixed;top:14px;right:14px;'
-    'z-index:99999;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;'
-    'font-size:11px;display:flex;gap:8px;">'
-    f'<a href="/setup" style="{_WIDGET_LINK_STYLE}">← Setup</a>'
-    f'<a href="/logout" style="{_WIDGET_LINK_STYLE}">Sign out</a>'
-    '</div>'
-)
 
 DASHBOARD_UNAVAILABLE_HTML = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><title>Dashboard starting…</title>
@@ -1563,6 +1555,228 @@ It may still be starting up, or it may have crashed.</p>
 </div>
 <script>setTimeout(()=>location.reload(),4000);</script>
 </body></html>""" % HERMES_DASHBOARD_PORT
+
+
+def _slack_mcp_dashboard_state() -> dict[str, bool | str]:
+    """Best-effort Slack MCP status for the proxied dashboard helper."""
+    env = read_env(ENV_FILE)
+    enabled_in_env = _looks_truthy(env.get("SLACK_MCP_ENABLED"))
+    configured_in_yaml = False
+    try:
+        config_text = (Path(HERMES_HOME) / "config.yaml").read_text()
+    except OSError:
+        config_text = ""
+    if config_text:
+        block = _extract_top_level_block(config_text, "mcp_servers")
+        _, entries = _split_mcp_server_entries(block)
+        configured_in_yaml = SLACK_MCP_SERVER_NAME in entries
+
+    enabled = enabled_in_env or configured_in_yaml
+    return {
+        "enabled": enabled,
+        "enabled_in_env": enabled_in_env,
+        "configured_in_yaml": configured_in_yaml,
+        "label": "Slack MCP ✓" if enabled else "Slack MCP",
+        "status": "Enabled" if enabled else "Not enabled",
+        "summary": (
+            "Hermes native dashboard currently has no dedicated Slack MCP page."
+            if enabled
+            else "Slack MCP is not enabled yet in this wrapper config."
+        ),
+        "detail": (
+            "Use Setup → Tool API Keys → Slack MCP to manage it here. "
+            "After saving, finish Slack's OAuth flow from Hermes runtime/logs."
+            if enabled
+            else "Enable it from Setup → Tool API Keys → Slack MCP, save, then "
+                 "finish Slack's OAuth flow from Hermes runtime/logs."
+        ),
+        "config_note": (
+            "config.yaml already contains mcp_servers.slack with auth: oauth."
+            if configured_in_yaml
+            else "config.yaml does not yet contain a managed mcp_servers.slack entry."
+        ),
+    }
+
+
+def _dashboard_enhancements_html() -> str:
+    """Overlay better contrast and a Slack MCP helper onto Hermes dashboard."""
+    slack = _slack_mcp_dashboard_state()
+    badge_style = (
+        "background:rgba(63,185,80,0.18);color:#7ee787;border-color:rgba(63,185,80,0.4);"
+        if slack["enabled"]
+        else "background:rgba(210,153,34,0.16);color:#f2cc60;border-color:rgba(210,153,34,0.38);"
+    )
+    return f"""
+<style id="hermes-dashboard-a11y">
+  :root {{
+    color-scheme: dark !important;
+    --background: #08111f !important;
+    --foreground: #eef4ff !important;
+    --card: #101a2a !important;
+    --card-foreground: #eef4ff !important;
+    --popover: #101a2a !important;
+    --popover-foreground: #eef4ff !important;
+    --muted: #172235 !important;
+    --muted-foreground: #b4c2da !important;
+    --secondary: #172235 !important;
+    --secondary-foreground: #eef4ff !important;
+    --border: #31405c !important;
+    --input: #31405c !important;
+    --ring: #7c9cff !important;
+    --primary: #7c9cff !important;
+    --primary-foreground: #08111f !important;
+  }}
+  html, body {{
+    background: var(--background) !important;
+    color: var(--foreground) !important;
+  }}
+  :where(h1, h2, h3, h4, h5, h6, strong, b, th, .font-semibold, .font-medium) {{
+    color: var(--foreground) !important;
+  }}
+  :where(p, label, small, .text-muted, .text-muted-foreground, .muted, .secondary-text,
+    [class*="text-slate-400"], [class*="text-slate-500"],
+    [class*="text-zinc-400"], [class*="text-zinc-500"],
+    [class*="text-neutral-400"], [class*="text-neutral-500"],
+    [class*="text-gray-400"], [class*="text-gray-500"]) {{
+    color: var(--muted-foreground) !important;
+  }}
+  :where(input, textarea, select, pre, code) {{
+    background: rgba(16,26,42,0.94) !important;
+    color: var(--foreground) !important;
+    border-color: var(--border) !important;
+  }}
+  :where(button, [role="button"], a) {{
+    text-underline-offset: 2px;
+  }}
+  :where([class*="card"], [class*="panel"], [class*="sidebar"], dialog, [role="dialog"]) {{
+    background: rgba(16,26,42,0.94) !important;
+    border-color: var(--border) !important;
+  }}
+  :where(table, tr, td, th, hr) {{
+    border-color: var(--border) !important;
+  }}
+  #hermes-back-widget {{
+    position: fixed;
+    top: 14px;
+    right: 14px;
+    z-index: 99999;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }}
+  .hermes-widget-btn {{
+    {_WIDGET_LINK_STYLE}
+    cursor: pointer;
+  }}
+  .hermes-widget-btn:hover {{
+    border-color: #7c9cff !important;
+    color: #eef4ff !important;
+    background: rgba(16,26,42,0.98) !important;
+  }}
+  #hermes-slack-mcp-modal[hidden] {{ display: none !important; }}
+  #hermes-slack-mcp-modal {{
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    background: rgba(3, 8, 15, 0.76);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }}
+  #hermes-slack-mcp-modal .sheet {{
+    width: min(520px, 100%);
+    background: #101a2a;
+    color: #eef4ff;
+    border: 1px solid #31405c;
+    border-radius: 14px;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+    padding: 20px;
+  }}
+  #hermes-slack-mcp-modal .sheet p {{
+    color: #b4c2da !important;
+    line-height: 1.6;
+    margin-top: 10px;
+  }}
+  #hermes-slack-mcp-modal .badge {{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    {badge_style}
+  }}
+  #hermes-slack-mcp-modal .actions {{
+    display: flex;
+    gap: 10px;
+    margin-top: 18px;
+    flex-wrap: wrap;
+  }}
+</style>
+<div id="hermes-back-widget">
+  <a href="/setup" class="hermes-widget-btn">← Setup</a>
+  <button type="button" id="hermes-slack-mcp-toggle" class="hermes-widget-btn">{slack["label"]}</button>
+  <a href="/logout" class="hermes-widget-btn">Sign out</a>
+</div>
+<div id="hermes-slack-mcp-modal" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="hermes-slack-mcp-title">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+      <div>
+        <h2 id="hermes-slack-mcp-title" style="margin:0;font-size:18px;">Slack MCP</h2>
+        <p style="margin-top:8px;">{slack["summary"]}</p>
+      </div>
+      <span class="badge">{slack["status"]}</span>
+    </div>
+    <p>{slack["detail"]}</p>
+    <p>{slack["config_note"]}</p>
+    <div class="actions">
+      <a href="/setup" class="hermes-widget-btn">Open Setup</a>
+      <button type="button" id="hermes-slack-mcp-close" class="hermes-widget-btn">Close</button>
+    </div>
+  </div>
+</div>
+<script id="hermes-dashboard-a11y-script">
+(() => {{
+  const toggle = document.getElementById('hermes-slack-mcp-toggle');
+  const modal = document.getElementById('hermes-slack-mcp-modal');
+  const close = document.getElementById('hermes-slack-mcp-close');
+  if (!toggle || !modal || modal.dataset.bound === '1') return;
+  modal.dataset.bound = '1';
+  const setHidden = (hidden) => {{ modal.hidden = hidden; }};
+  toggle.addEventListener('click', (event) => {{
+    event.preventDefault();
+    setHidden(false);
+  }});
+  close?.addEventListener('click', (event) => {{
+    event.preventDefault();
+    setHidden(true);
+  }});
+  modal.addEventListener('click', (event) => {{
+    if (event.target === modal) setHidden(true);
+  }});
+  document.addEventListener('keydown', (event) => {{
+    if (event.key === 'Escape') setHidden(true);
+  }});
+}})();
+</script>
+"""
+
+
+def _decorate_dashboard_html(content: bytes) -> bytes:
+    """Inject wrapper-owned dashboard accessibility helpers into HTML."""
+    if b"</body>" not in content:
+        return content
+    try:
+        text = content.decode("utf-8", errors="replace")
+        text = text.replace("</body>", _dashboard_enhancements_html() + "</body>", 1)
+        return text.encode("utf-8")
+    except Exception:
+        return content
 
 
 async def _proxy_to_dashboard(request: Request) -> Response:
@@ -1615,14 +1829,9 @@ async def _proxy_to_dashboard(request: Request) -> Response:
     content = upstream.content
     content_type = upstream.headers.get("content-type", "").lower()
 
-    # Inject the "← Setup" widget into HTML pages so users can always return.
-    if "text/html" in content_type and b"</body>" in content:
-        try:
-            text = content.decode("utf-8", errors="replace")
-            text = text.replace("</body>", BACK_TO_SETUP_WIDGET + "</body>", 1)
-            content = text.encode("utf-8")
-        except Exception:
-            pass  # on any error, fall back to raw upstream content
+    # Inject setup/navigation helpers plus contrast fixes into dashboard pages.
+    if "text/html" in content_type:
+        content = _decorate_dashboard_html(content)
 
     return Response(
         content=content,
