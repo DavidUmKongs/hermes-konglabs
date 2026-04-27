@@ -1300,8 +1300,6 @@ async def api_logs(request: Request):
 
 async def api_slack_mcp_test(request: Request):
     if err := guard(request): return err
-    if request.method != "POST":
-        return JSONResponse({"error": "Method not allowed"}, status_code=405)
 
     data = read_env(ENV_FILE)
     token = str(data.get("SLACK_MCP_USER_TOKEN", ""))
@@ -1703,10 +1701,15 @@ async def _run_slack_mcp_header_test(token: str) -> dict[str, object]:
         }
 
     if isinstance(payload, dict) and payload.get("error"):
+        rpc_error = payload["error"]
+        if isinstance(rpc_error, dict):
+            error_message = str(rpc_error.get("message") or rpc_error)
+        else:
+            error_message = str(rpc_error)
         return {
             "ok": False,
             "status_code": response.status_code,
-            "error": str(payload["error"]),
+            "error": error_message,
             "body": body_text,
         }
 
