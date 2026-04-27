@@ -998,6 +998,25 @@
                         Slack MCP endpoint. After saving, complete the OAuth flow from the Hermes runtime/logs.
                         Slack currently restricts MCP to internal or Marketplace-published apps.
                       </p>
+                      <div x-show="t.key==='SLACK_MCP_ENABLED'" class="field-gap" style="margin-top:12px;">
+                        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                          <button class="btn" @click="testSlackMcpHeader()" :disabled="testingSlackMcp">
+                            <span x-show="!testingSlackMcp">Test header auth</span>
+                            <span x-show="testingSlackMcp">Testing…</span>
+                          </button>
+                          <span class="hint" style="margin-top:0;">Uses <code>SLACK_MCP_USER_TOKEN</code> against <code>slack_header</code>.</span>
+                        </div>
+                        <div x-show="slackMcpTest" class="hint" style="margin-top:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.02);">
+                          <div style="font-weight:600;color:var(--text);" x-text="slackMcpTest?.ok ? 'Slack MCP header auth passed' : 'Slack MCP header auth failed'"></div>
+                          <div style="margin-top:6px;" x-text="slackMcpTest?.message || slackMcpTest?.error || ''"></div>
+                          <div x-show="slackMcpTest?.status_code" style="margin-top:6px;">
+                            HTTP <span x-text="slackMcpTest?.status_code"></span>
+                            <span x-show="slackMcpTest?.protocol_version">· MCP <span x-text="slackMcpTest?.protocol_version"></span></span>
+                            <span x-show="slackMcpTest?.server_info?.name">· <span x-text="slackMcpTest?.server_info?.name"></span></span>
+                          </div>
+                          <div x-show="slackMcpTest?.body" style="margin-top:6px;word-break:break-word;" x-text="slackMcpTest?.body"></div>
+                        </div>
+                      </div>
                     </div>
                   </template>
                   <template x-if="t.kind!=='toggle'">
@@ -1304,6 +1323,7 @@ function app() {
     { key: 'VOICE_TOOLS_OPENAI_KEY', label: 'OpenAI Voice (Whisper/TTS)', secret: true  },
     { key: 'HONCHO_API_KEY',         label: 'Honcho (memory)',            secret: true  },
     { key: 'SLACK_MCP_ENABLED',      label: 'Slack MCP',                  secret: false, kind: 'toggle' },
+    { key: 'SLACK_MCP_USER_TOKEN',   label: 'Slack MCP User Token',       secret: true  },
   ];
 
   return {
@@ -1314,7 +1334,9 @@ function app() {
     logs: [],
     pending: [],
     approved: [],
+    slackMcpTest: null,
     saving: false,
+    testingSlackMcp: false,
     restartOnSave: true,
     // True only when the SERVER has a persisted complete config.
     // Distinct from isSetupDone, which tracks the in-memory form.
@@ -1583,6 +1605,21 @@ function app() {
         if (pr.ok) this.pending  = (await pr.json()).pending||[];
         if (ar.ok) this.approved = (await ar.json()).approved||[];
       } catch {}
+    },
+
+    async testSlackMcpHeader() {
+      this.testingSlackMcp = true;
+      try {
+        const r = await fetch('/setup/api/mcp/slack/test', { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        this.slackMcpTest = d;
+        if (r.ok && d?.ok) this.notify('Slack MCP header auth passed', true);
+        else this.notify(d?.error || 'Slack MCP test failed', false);
+      } catch (e) {
+        this.slackMcpTest = { ok: false, error: `Slack MCP test failed: ${e.message}` };
+        this.notify(this.slackMcpTest.error, false);
+      }
+      this.testingSlackMcp = false;
     },
 
     async startGw()        { await fetch('/setup/api/gateway/start',   {method:'POST'}); this.notify('Starting…',   true); setTimeout(()=>this.loadStatus(),1000); },

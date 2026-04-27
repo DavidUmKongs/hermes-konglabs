@@ -108,6 +108,7 @@ ENV_VARS = [
     ("VOICE_TOOLS_OPENAI_KEY",   "OpenAI (voice/TTS)",       "tool",      True),
     ("HONCHO_API_KEY",           "Honcho (memory)",          "tool",      True),
     ("SLACK_MCP_ENABLED",        "Slack MCP",                "tool",      False),
+    ("SLACK_MCP_USER_TOKEN",     "Slack MCP User Token",     "tool",      True),
     ("TELEGRAM_BOT_TOKEN",       "Bot Token",                "telegram",  True),
     ("TELEGRAM_ALLOWED_USERS",   "Allowed User IDs",         "telegram",  False),
     ("DISCORD_BOT_TOKEN",        "Bot Token",                "discord",   True),
@@ -362,7 +363,9 @@ def factory_droid_local_base_url(api_mode: str) -> str:
 
 
 SLACK_MCP_SERVER_NAME = "slack"
+SLACK_MCP_HEADER_SERVER_NAME = "slack_header"
 SLACK_MCP_URL = "https://mcp.slack.com/mcp"
+MCP_PROTOCOL_VERSION = "2025-03-26"
 
 
 def _looks_truthy(value: str | None) -> bool:
@@ -439,6 +442,15 @@ def _render_slack_mcp_entry() -> str:
     )
 
 
+def _render_slack_mcp_header_entry() -> str:
+    return (
+        f"  {SLACK_MCP_HEADER_SERVER_NAME}:\n"
+        f"    url: {json.dumps(SLACK_MCP_URL)}\n"
+        f"    headers:\n"
+        f'      Authorization: "Bearer ${{SLACK_MCP_USER_TOKEN}}"'
+    )
+
+
 def build_mcp_servers_block(data: dict[str, str], existing_config_text: str = "") -> str:
     """Merge managed Slack MCP config with any pre-existing MCP servers."""
     existing_block = _extract_top_level_block(existing_config_text, "mcp_servers")
@@ -448,6 +460,11 @@ def build_mcp_servers_block(data: dict[str, str], existing_config_text: str = ""
         entries[SLACK_MCP_SERVER_NAME] = _render_slack_mcp_entry()
     else:
         entries.pop(SLACK_MCP_SERVER_NAME, None)
+
+    if _bearer_token(str(data.get("SLACK_MCP_USER_TOKEN", ""))):
+        entries[SLACK_MCP_HEADER_SERVER_NAME] = _render_slack_mcp_header_entry()
+    else:
+        entries.pop(SLACK_MCP_HEADER_SERVER_NAME, None)
 
     if not entries and not any(line.strip() for line in preamble):
         return ""
@@ -1281,6 +1298,25 @@ async def api_logs(request: Request):
     return JSONResponse({"lines": list(gw.logs)})
 
 
+async def api_slack_mcp_test(request: Request):
+    if err := guard(request): return err
+    if request.method != "POST":
+        return JSONResponse({"error": "Method not allowed"}, status_code=405)
+
+    data = read_env(ENV_FILE)
+    token = str(data.get("SLACK_MCP_USER_TOKEN", ""))
+    if not _bearer_token(token):
+        return JSONResponse({
+            "error": "Missing SLACK_MCP_USER_TOKEN. Add a Slack MCP user token first.",
+        }, status_code=400)
+
+    result = await _run_slack_mcp_header_test(token)
+    status_code = int(result.get("status_code", 502))
+    if result.get("ok"):
+        return JSONResponse(result)
+    return JSONResponse(result, status_code=status_code)
+
+
 async def api_gw_start(request: Request):
     if err := guard(request): return err
     asyncio.create_task(gw.start())
@@ -1597,6 +1633,100 @@ def _slack_mcp_dashboard_state() -> dict[str, bool | str]:
             if configured_in_yaml
             else "config.yaml does not yet contain a managed mcp_servers.slack entry."
         ),
+    }
+
+
+def _slack_mcp_initialize_payload() -> dict[str, object]:
+    return {
+        "jsonrpc": "2.0",
+        "id": "slack-mcp-init",
+        "method": "initialize",
+        "params": {
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {
+                "name": "hermes-konglabs-dashboard",
+                "version": "1.0.0",
+            },
+        },
+    }
+
+
+async def _run_slack_mcp_header_test(token: str) -> dict[str, object]:
+    """Authenticate directly against Slack MCP using a bearer user token."""
+    bearer = _bearer_token(token)
+    if not bearer:
+        raise ValueError("Missing SLACK_MCP_USER_TOKEN")
+
+    client = get_http_client()
+    try:
+        response = await client.post(
+            SLACK_MCP_URL,
+            headers={
+                "Authorization": f"Bearer {bearer}",
+                "Accept": "application/json, text/event-stream",
+                "Content-Type": "application/json",
+            },
+            json=_slack_mcp_initialize_payload(),
+        )
+    except httpx.RequestError as exc:
+        return {
+            "ok": False,
+            "status_code": 502,
+            "error": f"Slack MCP request failed: {exc}",
+        }
+
+    body_text = response.text[:400]
+    if response.status_code == 401:
+        return {
+            "ok": False,
+            "status_code": 401,
+            "error": "Slack MCP rejected the bearer token.",
+            "body": body_text,
+        }
+    if response.status_code >= 400:
+        return {
+            "ok": False,
+            "status_code": response.status_code,
+            "error": f"Slack MCP returned HTTP {response.status_code}.",
+            "body": body_text,
+        }
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return {
+            "ok": False,
+            "status_code": response.status_code,
+            "error": "Slack MCP returned a non-JSON response.",
+            "body": body_text,
+        }
+
+    if isinstance(payload, dict) and payload.get("error"):
+        return {
+            "ok": False,
+            "status_code": response.status_code,
+            "error": str(payload["error"]),
+            "body": body_text,
+        }
+
+    result = payload.get("result") if isinstance(payload, dict) else None
+    if not isinstance(result, dict):
+        return {
+            "ok": False,
+            "status_code": response.status_code,
+            "error": "Slack MCP initialize returned no result payload.",
+            "body": body_text,
+        }
+
+    server_info = result.get("serverInfo") if isinstance(result.get("serverInfo"), dict) else {}
+    return {
+        "ok": True,
+        "status_code": response.status_code,
+        "message": "Slack MCP accepted the bearer token.",
+        "protocol_version": result.get("protocolVersion"),
+        "server_info": server_info,
+        "instructions": result.get("instructions"),
     }
 
 
@@ -1940,6 +2070,7 @@ routes = [
     Route("/setup/api/config",                  api_config_put,      methods=["PUT"]),
     Route("/setup/api/status",                  api_status),
     Route("/setup/api/logs",                    api_logs),
+    Route("/setup/api/mcp/slack/test",          api_slack_mcp_test,  methods=["POST"]),
     Route("/setup/api/gateway/start",           api_gw_start,        methods=["POST"]),
     Route("/setup/api/gateway/stop",            api_gw_stop,         methods=["POST"]),
     Route("/setup/api/gateway/restart",         api_gw_restart,      methods=["POST"]),

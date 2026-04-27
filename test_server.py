@@ -1,8 +1,10 @@
+import asyncio
 import unittest
 from unittest.mock import AsyncMock, patch
 from tempfile import TemporaryDirectory
 from pathlib import Path
 
+import httpx
 from starlette.testclient import TestClient
 
 import server
@@ -262,6 +264,21 @@ mcp_servers:
         self.assertIn('github:', text)
         self.assertNotIn('\n  slack:\n', text)
 
+    def test_write_config_yaml_adds_slack_header_server_when_user_token_present(self):
+        with TemporaryDirectory() as tmpdir, \
+                patch.object(server, "HERMES_HOME", tmpdir):
+            server.write_config_yaml({
+                "LLM_MODEL": "demo-model",
+                "OPENROUTER_API_KEY": "sk-or-demo",
+                "SLACK_MCP_USER_TOKEN": "xoxp-demo-token",
+            })
+
+            text = Path(tmpdir, "config.yaml").read_text(encoding="utf-8")
+
+        self.assertIn("  slack_header:", text)
+        self.assertIn('url: "https://mcp.slack.com/mcp"', text)
+        self.assertIn('Authorization: "Bearer ${SLACK_MCP_USER_TOKEN}"', text)
+
     def test_is_config_complete_requires_codex_oauth_when_codex_selected(self):
         data = {
             "LLM_MODEL": "gpt-5.3-codex",
@@ -374,6 +391,56 @@ class DashboardProxyTests(unittest.TestCase):
 
         self.assertNotIn("Slack MCP \u2713", decorated)
         self.assertIn("Not enabled", decorated)
+
+    def test_run_slack_mcp_header_test_reports_successful_initialize(self):
+        response = httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": "slack-mcp-init",
+                "result": {
+                    "protocolVersion": "2025-03-26",
+                    "serverInfo": {"name": "slack", "version": "1.0.0"},
+                },
+            },
+        )
+        mock_client = type("MockClient", (), {"post": AsyncMock(return_value=response)})()
+
+        with patch("server.get_http_client", return_value=mock_client):
+            result = asyncio.run(server._run_slack_mcp_header_test("xoxp-demo"))
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status_code"], 200)
+        self.assertEqual(result["protocol_version"], "2025-03-26")
+        self.assertEqual(result["server_info"]["name"], "slack")
+
+    def test_api_slack_mcp_test_requires_user_token(self):
+        noop = AsyncMock(return_value=None)
+        patches = [
+            patch.object(server.dash, "start", noop),
+            patch.object(server.dash, "stop", noop),
+            patch.object(server.gw, "start", noop),
+            patch.object(server.gw, "stop", noop),
+        ]
+        for item in patches:
+            item.start()
+        self.addCleanup(lambda: [item.stop() for item in reversed(patches)])
+
+        with TemporaryDirectory() as tmpdir, \
+                patch.object(server, "HERMES_HOME", tmpdir), \
+                patch.object(server, "ENV_FILE", Path(tmpdir) / ".env"), \
+                TestClient(server.app) as client:
+            response = client.post(
+                "/login",
+                data={"username": server.ADMIN_USERNAME, "password": server.ADMIN_PASSWORD},
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 302)
+
+            response = client.post("/setup/api/mcp/slack/test")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("SLACK_MCP_USER_TOKEN", response.json()["error"])
 
 
 if __name__ == "__main__":
