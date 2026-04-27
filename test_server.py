@@ -414,6 +414,23 @@ class DashboardProxyTests(unittest.TestCase):
         self.assertEqual(result["protocol_version"], "2025-03-26")
         self.assertEqual(result["server_info"]["name"], "slack")
 
+    def test_run_slack_mcp_header_test_extracts_jsonrpc_error_message(self):
+        response = httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": "slack-mcp-init",
+                "error": {"code": -32600, "message": "Invalid Request"},
+            },
+        )
+        mock_client = type("MockClient", (), {"post": AsyncMock(return_value=response)})()
+
+        with patch("server.get_http_client", return_value=mock_client):
+            result = asyncio.run(server._run_slack_mcp_header_test("xoxp-demo"))
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "Invalid Request")
+
     def test_api_slack_mcp_test_requires_user_token(self):
         noop = AsyncMock(return_value=None)
         patches = [
