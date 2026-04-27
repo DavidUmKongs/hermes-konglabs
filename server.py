@@ -1790,7 +1790,11 @@ def _decorate_dashboard_html(content: bytes) -> bytes:
         return content
     try:
         text = content.decode("utf-8", errors="replace")
-        prefix, suffix = text.rsplit("</body>", 1)
+        # Use case-insensitive search matching the guard above.
+        idx = text.lower().rfind("</body>")
+        if idx == -1:
+            return content
+        prefix, suffix = text[:idx], text[idx + len("</body>"):]
         text = f"{prefix}{_get_dashboard_enhancements()}</body>{suffix}"
         return text.encode("utf-8")
     except (UnicodeDecodeError, UnicodeEncodeError):
