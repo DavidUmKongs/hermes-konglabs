@@ -20,7 +20,7 @@ Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on [Railway]
 - **Live Logs** — streaming gateway log viewer
 - **User Pairing** — approve or deny users who message your bot, revoke access anytime
 - **Slack DM Controls** — configure allowed Slack member IDs and an optional home channel from the dashboard
-- **Slack MCP Toggle** — enable Slack's official MCP server without overwriting your existing `mcp_servers` config
+- **Slack MCP Controls** — enable Slack's official MCP server, expose a native-dashboard helper, and test Railway-friendly header auth without overwriting existing `mcp_servers`
 - **Terminal Chat API** — send authenticated one-shot Hermes chat requests over HTTP and resume sessions from the CLI
 - **Bundled gstack Skills** — ships with the public `garrytan/gstack` skill bundle prewired as a default external Hermes skills directory
 - **Basic Auth** — password-protected admin panel
@@ -191,6 +191,31 @@ Important caveats:
 - This wrapper now preserves existing `mcp_servers` entries in
   `/data/.hermes/config.yaml` instead of overwriting them on every save.
 
+### Railway-friendly header auth testing
+
+For Railway deployments where localhost callback OAuth is awkward, the setup UI
+also supports a direct bearer-token validation path:
+
+1. Paste a Slack MCP user token into **Tool API Keys → Slack MCP User Token**
+2. Save the config
+3. Click **Test header auth**
+
+When a user token is present, the wrapper also manages this additional Hermes
+config entry:
+
+```yaml
+mcp_servers:
+  slack_header:
+    url: "https://mcp.slack.com/mcp"
+    headers:
+      Authorization: "Bearer ${SLACK_MCP_USER_TOKEN}"
+```
+
+The setup test button sends a direct MCP `initialize` request against Slack and
+shows the returned HTTP status / error inline, so you can tell the difference
+between a missing token, a rejected token (`401`), and a successful MCP
+handshake without shelling into the Railway container.
+
 ## Architecture
 
 ```
@@ -241,7 +266,7 @@ You can resume an existing Hermes session by including `"session_id"` (or
 `"provider"`, and `"max_turns"`. Base URL and API keys are configured via the
 admin dashboard (`.env`) or Railway service variables, not per-request.
 
-## Recent Updates (PR #1–#9)
+## Recent Updates (PR #1–#11)
 
 - **PR #1 — Custom Endpoint provider**: added first-class support for OpenAI-compatible endpoints such as Ollama, vLLM, llama.cpp, and LM Studio, including Base URL validation and local-model docs.
 - **PR #2 — Factory Droid provider**: added a dedicated Factory Droid setup path backed by `FACTORY_API_KEY` and a local authenticated bridge instead of treating it as a generic custom endpoint.
@@ -252,6 +277,8 @@ admin dashboard (`.env`) or Railway service variables, not per-request.
 - **PR #7 — Bundled gstack skills**: vendored the public `garrytan/gstack` bundle into the image and auto-wired it into Hermes as a default external skills directory.
 - **PR #8 — Current Hermes CLI compatibility**: fixed the wrapper chat command so `/api/chat` continues to work with the current `hermes chat -Q -q ...` CLI invocation shape.
 - **PR #9 — Slack MCP support**: added a setup toggle for the official Slack MCP endpoint and preserved existing `mcp_servers` entries when regenerating Hermes config.
+- **PR #10 — Dashboard Slack MCP discoverability**: added a proxied Hermes dashboard helper widget plus higher-contrast dashboard/setup colors so Slack MCP state is easier to find and the UI is more readable.
+- **PR #11 — Setup-side Slack MCP header testing**: added `SLACK_MCP_USER_TOKEN`, a managed `slack_header` MCP config entry, and a one-click dashboard test that validates bearer-token auth directly from `/setup`.
 
 ## Credits
 
