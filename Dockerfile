@@ -15,13 +15,14 @@ RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/opt/bun bash && \
 ENV HERMES_SOURCE_DIR=/opt/hermes-agent
 ENV HERMES_WEB_DIST=/opt/hermes-agent/web/dist
 
-# Install Hermes from the repo's pinned submodule instead of cloning an opaque
-# upstream revision during image build. Build the upstream dashboard once here
-# and point runtime at the emitted dist bundle via HERMES_WEB_DIST so
-# `hermes dashboard` skips runtime npm work while we keep the source tree
-# available for debugging and future upstream diffs.
-COPY vendor/hermes-agent /opt/hermes-agent
-RUN cd ${HERMES_SOURCE_DIR} && \
+# Clone Hermes at a pinned commit during the Docker build.
+# Railway does not initialise git submodules, so we cannot COPY
+# vendor/hermes-agent. Instead we clone and checkout the same SHA that
+# the submodule tracks, matching the gstack pattern below.
+ARG HERMES_REF=90a3e73daf18448ee5239b1e19d92ded0dbc77ae
+RUN git clone https://github.com/NousResearch/hermes-agent.git ${HERMES_SOURCE_DIR} && \
+    cd ${HERMES_SOURCE_DIR} && \
+    git checkout "$HERMES_REF" && \
     uv pip install --system --no-cache -e ".[all]" && \
     cd ${HERMES_SOURCE_DIR}/web && \
     if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then npm ci --silent; else npm install --no-audit --no-fund --silent; fi && \
